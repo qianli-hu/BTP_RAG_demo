@@ -5,6 +5,8 @@ Launchpad) with **SAP HANA Cloud Vector** as the production store: grounded answ
 **chunk-level citations**, a calibrated **refusal gate** for out-of-scope questions, and an
 **adversarial eval harness** wired into CI.
 
+![Architecture](docs/architecture.svg)
+
 **📐 Read [`docs/DESIGN.md`](docs/DESIGN.md)** — the full design in one document.
 Reference: [`docs/SUPPORT.md`](docs/SUPPORT.md) · roadmap: [`docs/FUTURE.md`](docs/FUTURE.md) ·
 decision history: [`docs/archive/`](docs/archive/).
@@ -24,11 +26,6 @@ faithfulness **0.983** · correctness **0.962** · refusal **7/7** (0 false) · 
 **32/33** · hit-rate@5 **76%** · ~$0.0012/answer · eval in ~2 min (8-way concurrent, 5× speedup).
 Every run is fingerprint-stamped (models+params+prompt+gold+corpus hashes) and recorded in
 [`eval/registry.jsonl`](eval/registry.jsonl) with per-item archives.
-
-## Architecture
-
-![Architecture](docs/architecture.svg)
-Full diagram + decisions: [`docs/DESIGN.md`](docs/DESIGN.md).
 
 ## Production practices in this repo
 CI gates on every PR (lint + tests; retrieval PRs also run deterministic eval gates) ·
