@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1060 440" font-family="-apple-system,Segoe UI,Helvetica,Arial,sans-serif">
+  <style>
+    .h{fill:#8b949e;font-size:13px;font-weight:700;letter-spacing:.05em}
+    .t{fill:#8b949e;font-size:12px}
+    .v{fill:#6e7681;font-size:12.5px;font-weight:700}
+    .axis{stroke:#8b949e;stroke-width:1}
+    .note{fill:#8b949e;font-size:11.5px;font-style:italic}
+  </style>
+
+  <!-- ============ PANEL A: accuracy vs retrieval depth (measured) ============ -->
+  <text x="30" y="28" class="h">A · ACCURACY vs RETRIEVAL DEPTH (measured, 33 gold positives)</text>
+
+  <line x1="70" y1="60" x2="70" y2="300" class="axis"/>
+  <line x1="70" y1="300" x2="430" y2="300" class="axis"/>
+  <text x="36" y="65" class="t">100%</text>
+  <text x="42" y="185" class="t">50%</text>
+  <text x="48" y="304" class="t">0</text>
+
+  <!-- bars: hit-rate@k  (33%, 64%, 76%) height = pct*2.4 -->
+  <rect x="100" y="220.8" width="70" height="79.2" fill="#3b6ea5" rx="4"/>
+  <text x="135" y="212" class="v" text-anchor="middle">33%</text>
+  <text x="135" y="318" class="t" text-anchor="middle">hit-rate@1</text>
+
+  <rect x="200" y="146.4" width="70" height="153.6" fill="#3b6ea5" rx="4"/>
+  <text x="235" y="138" class="v" text-anchor="middle">64%</text>
+  <text x="235" y="318" class="t" text-anchor="middle">hit-rate@3</text>
+
+  <rect x="300" y="117.6" width="70" height="182.4" fill="#2e9e6b" rx="4"/>
+  <text x="335" y="109" class="v" text-anchor="middle">76%</text>
+  <text x="335" y="318" class="t" text-anchor="middle">hit-rate@5 (k used)</text>
+
+  <!-- answer-quality anchors -->
+  <line x1="70" y1="69.1" x2="430" y2="69.1" stroke="#2e9e6b" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="428" y="62" class="v" fill="#2e9e6b" text-anchor="end">RAG answer correctness @k=5: 0.962</text>
+  <line x1="70" y1="162" x2="430" y2="162" stroke="#b35454" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="74" y="181" class="v" fill="#b35454">no-RAG LLM: 0.575</text>
+
+  <text x="30" y="352" class="note">Going deeper in retrieval (k 1→5) buys +43 pts of hit-rate —</text>
+  <text x="30" y="370" class="note">for ~0 added latency (see panel B). The LLM without retrieval is the red line.</text>
+
+  <!-- ============ PANEL B: where latency lives (measured, log scale) ============ -->
+  <text x="560" y="28" class="h">B · WHERE LATENCY LIVES (measured per stage, log scale)</text>
+
+  <!-- log10(ms)*60 px widths: 3.5ms→33, 7.3→52, 8.3→55, 688→170, 5200→223, 8000→234 -->
+  <text x="560" y="78" class="t">BM25 sparse</text>
+  <rect x="700" y="64" width="33" height="20" fill="#6e56a6" rx="3"/>
+  <text x="741" y="79" class="v">3.5 ms</text>
+
+  <text x="560" y="110" class="t">dense cosine (store)</text>
+  <rect x="700" y="96" width="52" height="20" fill="#6e56a6" rx="3"/>
+  <text x="760" y="111" class="v">7.3 ms</text>
+
+  <text x="560" y="142" class="t">RRF + dedup</text>
+  <rect x="700" y="128" width="55" height="20" fill="#6e56a6" rx="3"/>
+  <text x="763" y="143" class="v">8.3 ms</text>
+
+  <text x="560" y="174" class="t">embed query (API)</text>
+  <rect x="700" y="160" width="170" height="20" fill="#c08a1e" rx="3"/>
+  <text x="878" y="175" class="v">688 ms</text>
+
+  <text x="560" y="206" class="t">generate (gpt-5-mini)</text>
+  <rect x="700" y="192" width="223" height="20" fill="#b35454" rx="3"/>
+  <text x="931" y="207" class="v">~5 s median</text>
+
+  <text x="560" y="238" class="t">judge (gpt-5, optional)</text>
+  <rect x="700" y="224" width="234" height="20" fill="#b35454" rx="3" opacity="0.6"/>
+  <text x="942" y="239" class="v">+6–8 s</text>
+
+  <text x="560" y="270" class="t">out-of-scope query</text>
+  <rect x="700" y="256" width="120" height="20" fill="#2e9e6b" rx="3"/>
+  <text x="828" y="271" class="v">~0.4 s · $0 (refusal gate, no LLM)</text>
+
+  <text x="560" y="320" class="note">The entire retrieval engine costs ~19 ms — 97% of latency is LLM/API calls.</text>
+  <text x="560" y="338" class="note">So: accuracy levers on the retrieval side (deeper k, reranker ≈ +30 ms) are</text>
+  <text x="560" y="356" class="note">nearly free; every added LLM step (rewrite ≈ +1–3 s) costs seconds. That is</text>
+  <text x="560" y="374" class="note">why v1.5 queues a local cross-encoder reranker, not LLM query rewriting —</text>
+  <text x="560" y="392" class="note">and why the refusal gate short-circuits before the LLM.</text>
+
+  <line x1="520" y1="50" x2="520" y2="400" stroke="#30363d" stroke-width="1"/>
+</svg>

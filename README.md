@@ -22,10 +22,11 @@ A question-answering assistant over SAP BTP documentation that:
 - is **measured**: every quality claim below comes from a versioned, repeatable evaluation.
 
 **Live demo** — a real query against the running system: grounded answer, clickable
-citations into help.sap.com, per-request latency/cost, and the **gpt-5 judge auditing the
-answer live** (faithfulness / correctness / relevance):
+citations into help.sap.com, per-request latency/cost, the **experiment fingerprint**
+(sidebar — every answer attributable to an exact config), and the **gpt-5 judge auditing
+the answer live** with its rationale (faithfulness / correctness / relevance):
 
-<img src="docs/demo.png" alt="Live demo: cited answer with latency, cost and live LLM-as-judge scores" width="900">
+<img src="docs/demo.png" alt="Live demo: cited answer with experiment fingerprint, latency/cost telemetry and live LLM-as-judge scores + rationale" width="900">
 
 
 ## 2. Why RAG — measured, not assumed
@@ -59,6 +60,13 @@ out-of-scope questions from memory** — plausible, uncited, unauditable. RAG tu
 
 Every run is fingerprint-stamped (models + params + prompt + gold + corpus hashes) and
 recorded in [`eval/registry.jsonl`](eval/registry.jsonl) with immutable per-item archives.
+
+**The latency ↔ accuracy tradeoff, measured** — accuracy levers live in the milliseconds
+(retrieval side); latency lives in LLM/API calls. This is why v1.5 queues a **local
+cross-encoder reranker (≈ +30 ms)** over LLM query rewriting (≈ +1–3 s), and why the
+refusal gate short-circuits *before* the LLM:
+
+<img src="docs/latency_accuracy.svg" alt="Measured latency vs accuracy: hit-rate by retrieval depth, and per-stage latency on a log scale" width="900">
 
 Detail that matters: the judge caught one **correct-but-ungrounded** answer (q21: right facts,
 half not from the retrieved context — faithfulness 0.5, correctness 1.0). That's the metric
