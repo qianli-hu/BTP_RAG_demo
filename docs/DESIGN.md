@@ -27,37 +27,9 @@ questions from memory** — plausible, uncited, unauditable. RAG turns "trust me
 
 ## 2. Architecture
 
-```mermaid
-flowchart TB
-  subgraph IN["Ingest — offline, deterministic, no LLM"]
-    direction LR
-    A["SAP Help docs"] -->|"fetch.sh (sha-pinned)"| B["corpus/raw · 3 docs"]
-    B -->|"chunk.py — fitz · Docling · bs4"| C["1,216 chunks<br/>text + breadcrumbs + ids"]
-    C -->|"embed.py — OpenAI"| C2["vectors"]
-  end
+![Architecture](architecture.svg)
 
-  subgraph ST["VectorStore — two-track, swap unit = dense_search only"]
-    direction LR
-    S1[("SqliteStore<br/>local dev / demo")]
-    S2[("HanaStore<br/>SAP HANA Cloud")]
-  end
-  C2 --> ST
-
-  subgraph CO["core.ask — ONE engine shared by serving and eval"]
-    Q["query"] --> QE["embed query"]
-    QE --> D["dense top-30<br/>(store-owned cosine)"]
-    Q --> BM["BM25 top-30<br/>(app-layer)"]
-    D --> F["RRF fuse → dedup → top-5"]
-    BM --> F
-    F --> G{"refusal gate<br/>top-cosine ≥ 0.56?"}
-    G -- "no → refuse, $0, no LLM" --> NK["'Not in knowledge base.'"]
-    G -- yes --> L["gpt-5-mini grounded answer<br/>+ chunk-id citations"]
-  end
-  ST --> D
-
-  L --> API["online: FastAPI /ask · Streamlit UI"]
-  L --> EV["offline: eval harness → rule gates + gpt-5 judge → registry"]
-```
+*Ingest is offline and deterministic; serving and eval share one engine (`core.ask`); the store is two-track (SQLite dev/demo · SAP HANA Cloud prod) behind one interface.*
 
 ## 3. Measured results (full eval, 40-item gold set, fingerprint-stamped)
 

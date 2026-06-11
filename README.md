@@ -26,17 +26,8 @@ Every run is fingerprint-stamped (models+params+prompt+gold+corpus hashes) and r
 [`eval/registry.jsonl`](eval/registry.jsonl) with per-item archives.
 
 ## Architecture
-```mermaid
-flowchart LR
-  A["SAP docs<br/>(sha-pinned)"] --> B["1,216 chunks<br/>+ breadcrumbs/ids"] --> C["embed<br/>(OpenAI)"]
-  C --> S[("VectorStore<br/>Sqlite | SAP HANA Cloud")]
-  S --> R["hybrid retrieve<br/>dense ⊕ BM25 → RRF"]
-  R --> G{"refusal gate<br/>calibrated 0.56"}
-  G -- in scope --> L["gpt-5-mini answer<br/>+ chunk-id citations"]
-  G -- out of scope --> N["refuse ($0)"]
-  L --> X["FastAPI /ask · Streamlit UI"]
-  L --> E["eval: rule gates + gpt-5 judge<br/>→ registry"]
-```
+
+![Architecture](docs/architecture.svg)
 Full diagram + decisions: [`docs/DESIGN.md`](docs/DESIGN.md).
 
 ## Production practices in this repo
