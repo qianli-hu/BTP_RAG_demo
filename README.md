@@ -21,6 +21,13 @@ A question-answering assistant over SAP BTP documentation that:
 - **refuses** questions the documentation can't answer (`Not in knowledge base.`) instead of guessing;
 - is **measured**: every quality claim below comes from a versioned, repeatable evaluation.
 
+**Live demo** — a real query against the running system: grounded answer, clickable
+citations into help.sap.com, per-request latency/cost, and the **gpt-5 judge auditing the
+answer live** (faithfulness / correctness / relevance):
+
+<img src="docs/demo.png" alt="Live demo: cited answer with latency, cost and live LLM-as-judge scores" width="900">
+
+
 ## 2. Why RAG — measured, not assumed
 
 Same model (`gpt-5-mini`), same 40 questions, same `gpt-5` judge — with vs without retrieval:
