@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
-# Download the SAP AI Core guide PDF (SAP Help Portal) into docs/.
-# Kept out of git (see .gitignore) — SAP-copyright content, fetch locally.
+# Prototype helper: pull ONLY the SAP AI Core seed PDF into chunking/docs/, which
+# the chunk_*.py prototypes read by default. Kept out of git (SAP © content).
+#
+# The full, canonical corpus retrieval lives in ../corpus/ — see ../CORPUS.md.
+# To secure the whole 3-doc corpus + manifest:  ../corpus/fetch.sh
 set -e
 mkdir -p docs
 UA="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/124 Safari/537.36"

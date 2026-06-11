@@ -1,0 +1,62 @@
+{
+  "corpus": "BTP_RAG",
+  "scope": "focused-3-docs",
+  "embedding_model": "text-embedding-3-small",
+  "vector_dim": 1536,
+  "store_table": "BTP_RAG.CHUNKS",
+  "documents": [
+    {
+      "doc": "sap-ai-core",
+      "format": "pdf",
+      "file": "sap-ai-core.pdf",
+      "source_url": "https://help.sap.com/docs/sap-ai-core",
+      "version": "2026-06-04",
+      "bytes": 2624909,
+      "sha256": "9b9c8a45073fd99e6541336eea28ced6b42e18f3028f16166335cf8ae659dc2d",
+      "pages": 190,
+      "toc_entries": 151,
+      "raw_text_chars": 297410,
+      "approx_tokens": 74352,
+      "est_chunks": 509,
+      "chunks_measured": 406
+    },
+    {
+      "doc": "sap-hana-vector",
+      "format": "html",
+      "source_url": "https://help.sap.com/docs/hana-cloud-database/sap-hana-cloud-sap-hana-database-vector-engine-guide/introduction",
+      "version": "2026_1_QRC",
+      "deliverable_id": 40476398,
+      "deliverable_loio": "c40cab369db246f1a17feea1c031ddc1",
+      "build": 564,
+      "pages": 51,
+      "sha256": "1153bbd1f8ec6363dc273a2c5989a9512dae47567106afaae5668210885b58de",
+      "raw_text_chars": 101156,
+      "approx_tokens": 25289,
+      "est_chunks": 173,
+      "chunks_measured": 192
+    },
+    {
+      "doc": "sap-ai-launchpad",
+      "format": "pdf",
+      "file": "sap-ai-launchpad.pdf",
+      "source_url": "https://help.sap.com/docs/ai-launchpad",
+      "version": "2026-06-04",
+      "bytes": 14233457,
+      "sha256": "aadf769ecd30079a2982275db33bfe90d53dbd8bd22aa36e67dbbf01ce4ecadd",
+      "pages": 374,
+      "toc_entries": 249,
+      "raw_text_chars": 495976,
+      "approx_tokens": 123994,
+      "est_chunks": 849,
+      "chunks_measured": 618
+    }
+  ],
+  "totals": {
+    "docs": 3,
+    "pages": 615,
+    "approx_tokens": 223635,
+    "est_chunks": 1531,
+    "raw_bytes": 16858366,
+    "chunks_measured": 1216
+  }
+}

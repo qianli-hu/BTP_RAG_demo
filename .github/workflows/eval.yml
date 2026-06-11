@@ -1,0 +1,72 @@
+# Eval gates — the corpus-dependent quality gate (deterministic; no LLM judge).
+#
+# Rebuilds the corpus + embedded store on a fresh runner (or restores it from cache),
+# then runs eval/gates.py: hit-rate@5 >= 70%, refusal-gate separation, no false refusals.
+# A retrieval-quality regression turns this job RED.
+#
+# Needs repo secret OPENAI_API_KEY (embeddings only: corpus ~$0.005 on a cold cache,
+# ~$0.0001 per gated run thereafter). The © SAP corpus is fetched at runtime — never
+# committed. Triggered on PRs touching retrieval-critical paths, manually, and nightly
+# (nightly also catches upstream SAP-docs drift).
+name: eval-gates
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * *"          # nightly 06:00 UTC
+  pull_request:
+    paths:                        # only when retrieval quality could actually change
+      - "ingest/**"
+      - "retrieve/**"
+      - "config.py"
+      - "prompts.py"
+      - "core.py"
+      - "eval/**"
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install (core deps; skip docling — PDF-table pass is too heavy for CI)
+        run: pip install -e .
+
+      # PR runs reuse the cached store (fast, ~$0). NIGHTLY runs skip the cache on purpose:
+      # they refetch the live SAP docs + re-chunk + re-embed (~$0.005), so an upstream
+      # docs change that hurts retrieval turns the job red = drift detection.
+      - name: Restore embedded store (PR runs only — keyed on chunker+config)
+        id: cache-store
+        if: github.event_name != 'schedule'
+        uses: actions/cache@v4
+        with:
+          path: ingest/out/btp_rag.db
+          key: store-${{ hashFiles('ingest/chunk.py', 'config.py', 'eval/gold/*.jsonl') }}
+
+      - name: Build corpus + chunks + embeddings (cold cache only)
+        if: steps.cache-store.outputs.cache-hit != 'true'
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          bash corpus/fetch.sh
+          python ingest/chunk.py
+          python ingest/embed.py
+
+      # Triage signal: did the UPSTREAM DOCS change vs the committed manifest?
+      # (informational, never fails) Combined with the gate verdict:
+      #   docs unchanged + gates red  -> our regression;  docs changed + gates red -> drift/stale gold.
+      - name: Corpus drift vs committed manifest
+        if: github.event_name == 'schedule'
+        run: |
+          git diff --stat -- corpus/MANIFEST.json || true
+          git diff -- corpus/MANIFEST.json | grep -E '^[+-].*(sha256|version|pages)' || echo "corpus unchanged vs committed manifest"
+
+      - name: Run eval gates
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: python eval/gates.py

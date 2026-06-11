@@ -1,4 +1,18 @@
 # app/ — TODO
 
-Streamlit/FastAPI query UI: question → retrieved answer + expandable citations + "not in KB" path.
-v1 local; v2 deploy to Cloud Foundry (cf push, bind HANA + AI Core).
+FastAPI query API:
+
+```text
+POST /ask
+```
+
+Request: question. Response: answer, citations, retrieved chunk ids, and `answerable`.
+
+v1 runs locally:
+
+```text
+local FastAPI -> HANA Cloud -> OpenAI provider
+```
+
+Streamlit is optional as a thin client. v2 deploys the same FastAPI app to Cloud Foundry
+(`cf push`, bind/inject HANA + model-provider credentials).

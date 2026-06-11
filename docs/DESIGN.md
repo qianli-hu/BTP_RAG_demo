@@ -1,0 +1,119 @@
+# BTP_RAG — System Design (v1)
+
+*The one document. Reads top-down: from "what is this" to concrete mechanics. Companions:
+[SUPPORT.md](SUPPORT.md) (reference/runbook) · [FUTURE.md](FUTURE.md) (v2) · [archive/](archive/) (decision history).*
+
+---
+
+## 1. What this is (no tech required)
+
+A question-answering assistant over **SAP BTP documentation** that:
+- answers **only from the documents**, with **citations** linking every claim to the exact SAP Help page;
+- **refuses** questions the documentation can't answer (`Not in knowledge base.`) instead of guessing;
+- is **measured**: every quality claim below comes from a versioned, repeatable evaluation.
+
+Why not just ask the LLM directly? We measured that (same model, same questions, same judge):
+
+| | **RAG (this system)** | plain LLM, no retrieval |
+|---|---:|---:|
+| answer correctness (LLM-judged) | **0.962** | 0.575 |
+| gold facts present verbatim (deterministic) | **22/27** | 6/27 |
+| gave up ("I don't know") | 0/33 | 13/33 |
+| out-of-scope questions correctly declined | **7/7** | 1/7 — *answered 6/7 ungoverned* |
+| verifiable citations | 32/33 valid | impossible |
+
+The last two rows are the enterprise argument: without retrieval the model **answers out-of-scope
+questions from memory** — plausible, uncited, unauditable. RAG turns "trust me" into "here's the source."
+
+## 2. Architecture
+
+```mermaid
+flowchart TB
+  subgraph IN["Ingest — offline, deterministic, no LLM"]
+    direction LR
+    A["SAP Help docs"] -->|"fetch.sh (sha-pinned)"| B["corpus/raw · 3 docs"]
+    B -->|"chunk.py — fitz · Docling · bs4"| C["1,216 chunks<br/>text + breadcrumbs + ids"]
+    C -->|"embed.py — OpenAI"| C2["vectors"]
+  end
+
+  subgraph ST["VectorStore — two-track, swap unit = dense_search only"]
+    direction LR
+    S1[("SqliteStore<br/>local dev / demo")]
+    S2[("HanaStore<br/>SAP HANA Cloud")]
+  end
+  C2 --> ST
+
+  subgraph CO["core.ask — ONE engine shared by serving and eval"]
+    Q["query"] --> QE["embed query"]
+    QE --> D["dense top-30<br/>(store-owned cosine)"]
+    Q --> BM["BM25 top-30<br/>(app-layer)"]
+    D --> F["RRF fuse → dedup → top-5"]
+    BM --> F
+    F --> G{"refusal gate<br/>top-cosine ≥ 0.56?"}
+    G -- "no → refuse, $0, no LLM" --> NK["'Not in knowledge base.'"]
+    G -- yes --> L["gpt-5-mini grounded answer<br/>+ chunk-id citations"]
+  end
+  ST --> D
+
+  L --> API["online: FastAPI /ask · Streamlit UI"]
+  L --> EV["offline: eval harness → rule gates + gpt-5 judge → registry"]
+```
+
+## 3. Measured results (full eval, 40-item gold set, fingerprint-stamped)
+
+| metric | value | how scored |
+|---|---|---|
+| faithfulness (grounding / anti-hallucination) | **0.983** | gpt-5 judge vs retrieved context |
+| correctness | **0.962** | gpt-5 judge vs gold answer |
+| out-of-corpus refusal | **7/7**, 0 false refusals | exact-string rule |
+| citation validity | **32/33** | rule: cited chunk-id exists **and** was retrieved |
+| retrieval hit-rate@5 | **76%** | rule: gold section in top-5 |
+| retrieval engine latency | ~19 ms (+~0.7 s query embed) | measured per step |
+| answer latency / cost | median ~5.9 s · ~$0.0012/answer | request log |
+| eval wall-clock | ~2 min (8-way concurrent; was ~8 min serial → **5×**) | measured A/B |
+
+Detail that matters: the judge caught one **correct-but-ungrounded** answer (q21: right facts,
+half not from the retrieved context — faithfulness 0.5, correctness 1.0). That's the metric
+doing its job: correctness alone would have rubber-stamped a hallucination pattern.
+Known weak spot: **cross-doc questions** (faith 0.9 / corr 0.8) — diagnosed as a *ranking* gap
+(gold chunk at rank 6–10), fix queued (local cross-encoder rerank; see FUTURE.md).
+
+## 4. Key design decisions (each: what / why)
+
+| decision | why |
+|---|---|
+| **Two-track store** (`SqliteStore` dev/demo, `HanaStore` prod) behind one `VectorStore` interface | dev/prod parity + demo resilience; only `dense_search` is backend-specific — embedding, BM25, RRF, dedup are one fixed core |
+| **Hybrid retrieval**: dense (cosine) ⊕ sparse (BM25) fused by **RRF** | dense catches paraphrase, sparse catches exact SQL identifiers (`REAL_VECTOR`); RRF fuses by rank so score scales don't matter |
+| **BM25 in the app layer** | HANA **free tier** doesn't support in-DB full-text (verified empirically); index rebuilds in 38 ms at startup — always statistically exact. Paid HANA moves it in-DB unchanged |
+| **Exact cosine scan, no HNSW** | at 1,216 vectors exact is sub-ms and 100% recall; HNSW is the documented scale lever (free tier supports it — verified) |
+| **Two-layer refusal gate** | layer 1: top-cosine < **0.56** → refuse with zero LLM cost; layer 2: prompt-level refusal. Threshold **calibrated** on the 7 adversarial negatives (clean separation: negatives ≤ 0.550, positives ≥ 0.572 → 40/40) |
+| **Citations = chunk ids**, validated by rule | URL-level checks pass wrong-section citations; chunk-id must exist in corpus **and** in that query's retrieved set |
+| **Eval split: rules judge retrieval, LLM judges generation** | we built gold section labels, so retrieval is scored deterministically (free, zero variance, CI-safe); the gpt-5 judge handles only what rules can't read (faithfulness/correctness/relevance). Judge ≠ answer model (less self-preference bias) |
+| **Adversarial gold set** (17/40): negatives, distractors, false premises, entity confusion | tests refusal, precision under lexical traps, anti-sycophancy — negatives verified absent from the corpus before inclusion |
+| **Experiment fingerprint + registry** | the "model" = embed+LLMs+params+prompt_version+**gold_hash**+**corpus_hash**; every run appends to `eval/registry.jsonl` with per-item results archived — any number is attributable and reproducible |
+| **Config-driven everything** (`config.py`, `providers.py`, `prompts.py`) | no hardcoded models/prompts/params; provider adapter makes OpenAI→SAP Gen AI Hub a config change |
+| **CI as quality gate** | every PR: lint + unit tests; retrieval-touching PRs: deterministic eval gates (hit-rate ≥ 70%, refusal separation); **nightly rebuilds from live SAP docs = drift detection** with a triage matrix (corpus-hash diff × gate verdict) |
+
+## 5. Module map
+
+| module | path | inspect with |
+|---|---|---|
+| shared kernel | `config.py` `providers.py` `prompts.py` `core.py` | `python3 -c "import config,json;print(json.dumps(config.fingerprint('v1'),indent=2))"` |
+| corpus | `corpus/` (+ committed `MANIFEST.json`) | `cat corpus/MANIFEST.json` |
+| chunking | `ingest/` | `cat ingest/out/chunks_report.md` |
+| retrieval | `retrieve/` (store, hybrid, generate) | `PYTHONPATH=. python3 retrieve/hybrid.py "your query"` |
+| serving | `app/main.py` (FastAPI) | `uvicorn app.main:app` → `localhost:8000/docs` |
+| eval & gates | `eval/` (gold/, scorers, judge, gates, registry) | [eval/README.md](../eval/README.md) — incl. drill-down recipe |
+| CI | `.github/workflows/` + `tests/` | `pytest && ruff check . && PYTHONPATH=. python3 eval/gates.py` |
+
+## 6. Run it
+
+```bash
+pip install -e ".[dev]"                  # or: uv sync
+./corpus/fetch.sh                        # fetch the 3 SAP docs (© content stays local)
+python3 ingest/chunk.py                  # → 1,216 chunks
+PYTHONPATH=. python3 ingest/embed.py     # embed → local SQLite (~$0.005)
+PYTHONPATH=. python3 eval/gates.py       # deterministic quality gates
+PYTHONPATH=. python3 -m uvicorn app.main:app   # serve → POST /ask
+# optional: STORE=hana + .env HANA creds → same pipeline on SAP HANA Cloud
+```

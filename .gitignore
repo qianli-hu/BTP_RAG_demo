@@ -6,7 +6,7 @@ hana-key.json
 
 # Copyrighted corpus + derived full-text dumps
 chunking/docs/
-**/docs/
+corpus/raw/
 docling_out.md
 docling_p8.md
 docling_chunks.json
@@ -21,3 +21,17 @@ venv/
 # Models / caches
 models/
 .cache/
+
+# Derived chunk text (© SAP) — report is committed, jsonl is not
+ingest/out/*.jsonl
+ingest/out/*.log
+ingest/out/*.db
+
+# Logs + serving traces (local only); runs/ archives + registry.jsonl ARE committed
+eval/out/logs/
+eval/out/requests.jsonl
+eval/out/results.jsonl
+eval/out/results_norag.jsonl
+
+# local working material (screenshots etc.)
+human-input/
