@@ -94,7 +94,33 @@ Known weak spot: **cross-doc questions** (faith 0.9 / corr 0.8) — diagnosed as
 | **Config-driven everything** (`config.py`, `providers.py`, `prompts.py`) | no hardcoded models/prompts/params; provider adapter makes OpenAI→SAP Gen AI Hub a config change |
 | **CI as quality gate** | every PR: lint + unit tests; retrieval-touching PRs: deterministic eval gates (hit-rate ≥ 70%, refusal separation); **nightly rebuilds from live SAP docs = drift detection** with a triage matrix (corpus-hash diff × gate verdict) |
 
-## 5. Module map
+## 5. Ownership & governance — who computes what, who stores what
+
+Verified empirically on the live instance (registry: `gates-hana` — **identical gate results
+on both stores**, dev/prod parity measured). Three reasons a piece runs where it runs:
+**(C)** platform constraint (trial/free tier) · **(D)** deliberate design · **(S)** scale-gated.
+
+| part | computed by | stored in | why here | with FULL HANA access (paid + entitlements) |
+|---|---|---|---|---|
+| fetch + chunking + ids/hashes | app (deterministic, no LLM) | — | **D** — ingestion is app logic everywhere | unchanged |
+| chunk text + metadata | — | **HANA** `BTP_RAG.CHUNKS` (SQLite on dev track) | **D** — single source of truth in the DB | unchanged |
+| **embedding computation** | **OpenAI API** (app orchestrates) | — | **C** — no Gen AI Hub entitlement on trial; free tier lacks the NLP service for in-DB `VECTOR_EMBEDDING()` | **in-platform**: HANA `VECTOR_EMBEDDING()` or Gen AI Hub embeddings — text never leaves SAP (data residency) |
+| embedding storage | — | **HANA** `REAL_VECTOR(1536)` | works even on free tier | unchanged; re-embed on provider switch |
+| **dense search** | **HANA** (`COSINE_SIMILARITY`, server-side) | — | **D** — the point of HANA Cloud Vector | + `HNSW VECTOR INDEX` at ~100k+ vectors (**S**; verified available even on free) |
+| **sparse/BM25** | **app** (`rank_bm25`, in-memory index built at startup from HANA text) | index not persisted (38 ms rebuild) | **C** — free tier blocks `CREATE FULLTEXT INDEX` + PAL BM25 | **in-DB**: `CONTAINS()`/`SCORE()` full-text or PAL BM25 — sparse never leaves the DB |
+| RRF fusion + dedup | app, at query time | — | **D** — pure rank math, backend-independent | optional move in-DB (`langchain-hana` hybrid); app-side stays legitimate |
+| refusal gate (0.56) | app (threshold on HANA-computed score) | — | **D** | unchanged |
+| answer + judge LLMs | OpenAI (`gpt-5-mini` / `gpt-5`) | — | **C** — no Gen AI Hub on trial | **Gen AI Hub** (+ Orchestration: content filtering, data masking, templating) — LLM calls in-platform, one SAP contract |
+| reranker (v1.5) | local cross-encoder (planned) | — | **C** — `CROSS_ENCODE` needs the paid NLP service | **HANA `CROSS_ENCODE`** — retrieve→fuse→rerank fully in-DB |
+| DB credentials | `DBADMIN` via `.env` | — | **C/D** — trial shortcut | least-privilege technical user (SELECT/INSERT on `BTP_RAG` only) + XSUAA/service-binding injection, no password in env |
+
+**The one-line summary:** with full access, every **(C)** row collapses into the SAP platform —
+embedding, sparse search, reranking, and LLM calls all move in-platform/in-DB and corpus text
+never crosses a third-party boundary; the **(D)** rows (chunking, RRF, refusal, eval) stay in
+the app because they belong there. The provider adapter and `VectorStore` interface mean those
+moves are config changes, not rewrites.
+
+## 6. Module map
 
 | module | path | inspect with |
 |---|---|---|
@@ -106,7 +132,7 @@ Known weak spot: **cross-doc questions** (faith 0.9 / corr 0.8) — diagnosed as
 | eval & gates | `eval/` (gold/, scorers, judge, gates, registry) | [eval/README.md](../eval/README.md) — incl. drill-down recipe |
 | CI | `.github/workflows/` + `tests/` | `pytest && ruff check . && PYTHONPATH=. python3 eval/gates.py` |
 
-## 6. Run it
+## 7. Run it
 
 ```bash
 pip install -e ".[dev]"                  # or: uv sync

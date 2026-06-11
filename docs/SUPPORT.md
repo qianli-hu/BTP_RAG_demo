@@ -59,5 +59,4 @@ re-validated against the new chunks and versioned with it (`gold_hash` + `corpus
 
 ## Known limitations (v1, by choice)
 Query rewrite & reranker not wired (config seams exist; evidence said not needed yet / queued) ·
-judge is single-model holistic (panel/per-claim = v2) · drift visibility bounded by gold
-coverage · HANA path loaded but the dense-search leg awaits a verification pass.
+judge is single-model holistic (panel/per-claim = v2) · drift visibility bounded by gold coverage
