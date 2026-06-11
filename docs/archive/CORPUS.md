@@ -1,4 +1,4 @@
-> **ARCHIVED design history** — superseded by [docs/DESIGN.md](../DESIGN.md). Kept for decision provenance.
+> **ARCHIVED design history** — superseded by the [README](../../README.md). Kept for decision provenance.
 
 # BTP_RAG — Corpus Definition (v1)
 

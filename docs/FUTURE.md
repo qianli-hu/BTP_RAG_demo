@@ -1,6 +1,6 @@
 # BTP_RAG — Future Design (v1.5 / v2)
 
-*What comes next, and why it isn't in v1. Companion to [DESIGN.md](DESIGN.md).*
+*What comes next, and why it isn't in v1. Companion to the [README](../README.md).*
 
 ## v1.5 — queued levers, gated on measured need
 - **Cross-encoder reranker** (local `ms-marco-MiniLM`, config seam `RERANK_*` already in place):

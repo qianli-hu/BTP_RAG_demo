@@ -1,6 +1,6 @@
 # BTP_RAG — Support Reference (ops, data, runbook)
 
-*Deep reference behind [DESIGN.md](DESIGN.md). For full decision history see [archive/](archive/).*
+*Deep reference behind the [README](../README.md). For full decision history see [archive/](archive/).*
 
 ## Corpus (3 docs, pinned in `corpus/MANIFEST.json`)
 | doc id | source | format | pages | chunks |
