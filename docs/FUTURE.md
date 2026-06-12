@@ -283,6 +283,44 @@ never reaches the context window is.
 > the ACL predicate), the per-chunk metadata schema (gains `acl/classification/pii` fields),
 > and the adversarial-gold pattern (gains leakage tests).
 
+## 10. Agentic orchestration: LangChain / LangGraph (looping + multi-agent)
+
+Direction flagged, exact design open. v1's `core.ask` is deliberately a **linear pipeline**
+(retrieve → gate → generate); LangGraph models pipelines as **state graphs with conditional
+edges and cycles**, which unlocks two patterns we can't express linearly:
+
+**Looping (corrective / self-RAG).** Use our own judge as an in-loop critic:
+```
+retrieve → generate → judge —(faithfulness ≥ τ)→ answer
+                        └—(low faith / weak retrieval)→ rewrite or decompose query
+                                                        → re-retrieve → generate (≤ N loops)
+```
+Today a weak answer just ships with a low score; a loop gets a second attempt. Natural
+targets: the **cross-doc** items (corr 0.8) and borderline-refusal queries. LangGraph gives
+the loop bookkeeping for free: state, max-iteration caps, checkpointing, human-in-the-loop
+interrupts, per-node retries.
+
+**Multi-agent.** Candidate decompositions for this system (unvalidated, to prototype):
+- **router** — query type → factual / cross-doc / out-of-scope path with different budgets
+- **per-corpus retrieval agents** when the corpus federates (SAP docs ⊕ customer KB ⊕
+  tickets — each source an agent/tool with its own ACL), a synthesizer merges
+- **ops agents** — corpus-refresh agent running the drift triage (see SUPPORT.md) and
+  proposing gold updates; an eval agent that drills into failures
+- bonus: `langchain-hana` ships HANA vector-store integrations — adopting the ecosystem
+  also shortens the Gen AI Hub path.
+
+**Discipline (why this is v2, not v1):**
+- every loop iteration costs **LLM-seconds** (see the latency↔accuracy chart — rewrite ≈
+  +1–3 s/turn); loops must be bounded and reserved for queries the cheap path fails;
+- adopt the framework **only for the graph parts** (loops/branches) — the deterministic
+  core (chunking, RRF, gates) stays ours;
+- non-negotiable: the graph runs behind the same `/ask` contract, emits **fingerprinted
+  traces**, and adoption is gated the usual way — **A/B on the gold set** (does looping
+  lift cross-doc correctness, at what latency/cost?).
+
+> **Verdict:** v2 exploration. Prototype a LangGraph corrective-RAG loop behind `/ask`,
+> A/B vs the linear pipeline against the registry baseline.
+
 ---
 
 ## v1 pull-forward verdicts
@@ -298,6 +336,7 @@ never reaches the context window is.
 | Blockify-style KnowledgeBlocks (§6) | preserve provenance in chunks so blocks can be derived later | query-aligned blocks + distillation/dedup + A/B gate |
 | Section summaries (§7) | parent context expands to raw source chunks | generated summaries with `source_chunk_ids` provenance |
 | Vector ANN index (§8) | exact brute-force cosine scan (1.2k vectors → faster + exact) | HNSW index once corpus scales past exact-scan latency budget |
+| LangGraph loops / multi-agent (§10) | linear pipeline + post-hoc judge | corrective-RAG loop (judge in-loop), router + per-corpus agents — A/B-gated |
 
 **Recommendation:** make **rule-based eval gates (§1A)** and the **citation existence
 check (§2)** mandatory v1 because they are cheap and directly support the demo claim.
