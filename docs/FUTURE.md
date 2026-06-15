@@ -321,6 +321,75 @@ interrupts, per-node retries.
 > **Verdict:** v2 exploration. Prototype a LangGraph corrective-RAG loop behind `/ask`,
 > A/B vs the linear pipeline against the registry baseline.
 
+## 11. Spend the budget on KB structure, not the matcher (PageIndex & reasoning retrieval)
+
+**Thesis (the important part).** Every retrieval system has a fixed compute budget. The
+highest-leverage place to spend it is **the quality and structure of what you retrieve
+over** — *not* a bigger embedding model or an LLM query-rewriter. Retrieval quality is
+upstream-bound: structure-destroyed chunks cap the whole pipeline, and no reranker or
+rewrite recovers a fact that chunking sliced in half. Our own data agrees — the retrieval
+engine is ~19 ms of a ~6 s request (latency↔accuracy chart), and our cross-doc weakness was
+diagnosed as a *ranking/structure* problem (gold chunk at rank 6–10, already in the pool),
+not a matcher problem. So structure-side investment is both the cheapest and highest-yield lever.
+
+**PageIndex — the extreme version of this bet** (VectifyAI, 2025; 98.7% on FinanceBench vs
+30–50% for vanilla vector RAG). It throws away embeddings, chunking, and the vector DB
+entirely. Instead it builds a hierarchical JSON tree of the document —
+`{title, summary, page-range, children}`, an **in-context index** that lives in the LLM's
+context, not an external store — and retrieves by **reasoning**: the LLM reads the tree
+(titles + summaries), decides which nodes likely hold the answer, fetches those pages, asks
+"enough?", and loops. Like a human flipping through a report, not cosine similarity over
+fragments. What it buys:
+- **cross-reference following** — "see Appendix G (p.87)" gets navigated; a vector has zero
+  semantic similarity to "Appendix G", so vector RAG never follows it;
+- **structure preservation** — a table's title, header row, and cells stay one node instead
+  of being sliced across chunk 14/15;
+- **multi-step reasoning** — "compare FY2023 vs FY2024" pulls from two sections in one loop.
+
+**We are already on this spectrum — partway.** BTP_RAG does *not* discard structure the way
+naive vector RAG does; the chunker reconstructs the heading tree and carries it as metadata:
+- `section_path` = the breadcrumb (`What Is SAP AI Core? › Features`) — a TOC path;
+- `parent_section_id` / `prev_id` / `next_id` = the tree + reading order (the "small-to-big" hook);
+- `embed_text` = breadcrumb **prefixed** to the chunk — we already bias embeddings toward structure;
+- the `is_toc` filter already detects and parses tables-of-contents.
+PageIndex is the same idea at its limit: make structure the *primary index* rather than
+metadata beside a vector. Our SAP corpus (3 well-structured docs, clean heading hierarchies)
+is a near-ideal candidate — exactly the "single long, well-structured document" regime where it wins.
+
+**Three concrete v2 bets on KB structure:**
+
+1. **Reasoning retrieval over our existing tree.** We already have the tree (`section_path` +
+   `parent_section_id`). Add a retrieval mode that walks it by LLM reasoning — "which sections
+   answer this?" → fetch → expand via `prev/next/parent` → verify — complementing dense+BM25,
+   especially for cross-doc cases. Our queued small-to-big assembly pushed from *mechanical*
+   expansion toward *navigated* expansion.
+
+2. **Hierarchical / recursive summarization & "context-as-RAM".** Echoes Karpathy's "context
+   window as RAM" framing: as context grows, keep the *structured document* resident and let
+   the model navigate it, rather than retrieving disconnected fragments. Concretely: attach
+   LLM-generated node summaries to each `section_id` (cheap, offline, `content_sha256`-cached),
+   so a coarse-to-fine pass routes on summaries before reading raw text.
+
+3. **Embed the answer space, not just the chunk (query↔answer asymmetry).** PageIndex's
+   sharpest critique: *the query doesn't look like the answer.* A fix that keeps our vector
+   path: for each chunk, generate the hypothetical questions it answers and embed **those**
+   (doc2query / HyDE-adjacent), so matching becomes query→question instead of query→prose —
+   attacking the asymmetry without abandoning the fast vector first-stage.
+
+**Honest limits (why v2, why hybrid wins).** PageIndex is a **depth tool, not a breadth
+tool**: superb on one long structured doc, impractical to tree-and-reason over 10k short docs
+(vector DBs stay irreplaceable there). It's **slow and costly** — multiple LLM calls/query
+(seconds, not ms) vs one embedding lookup — colliding head-on with our serving/throughput
+track. And **garbage-in-garbage-out**: tree quality is bounded by document structure; a messy
+scanned PDF degrades the whole chain. So the practical architecture is the **hybrid**:
+vector/BM25 to *locate* the right document/section fast, then tree-reasoning for *deep
+extraction* within it — the small-to-big shape we already have, with a reasoning navigator added.
+
+> **Verdict:** v2 exploration, A/B-gated on the gold set (does reasoning retrieval lift
+> cross-doc correctness, at what latency/cost?). The transferable principle is **v1-permanent:
+> invest the retrieval budget in chunk/KB structure quality — it's cheaper (≈ms) and
+> higher-yield than upgrading the matcher.**
+
 ---
 
 ## v1 pull-forward verdicts
@@ -337,6 +406,7 @@ interrupts, per-node retries.
 | Section summaries (§7) | parent context expands to raw source chunks | generated summaries with `source_chunk_ids` provenance |
 | Vector ANN index (§8) | exact brute-force cosine scan (1.2k vectors → faster + exact) | HNSW index once corpus scales past exact-scan latency budget |
 | LangGraph loops / multi-agent (§10) | linear pipeline + post-hoc judge | corrective-RAG loop (judge in-loop), router + per-corpus agents — A/B-gated |
+| KB structure / reasoning retrieval (§11) | structure-aware chunks (heading tree carried as metadata) | tree/reasoning retrieval, doc2query, recursive summaries — hybrid with vector first-stage |
 
 **Recommendation:** make **rule-based eval gates (§1A)** and the **citation existence
 check (§2)** mandatory v1 because they are cheap and directly support the demo claim.
