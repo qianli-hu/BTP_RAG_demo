@@ -75,7 +75,77 @@ Known weak spot: **cross-doc questions** (faith 0.9 / corr 0.8) — diagnosed as
 (gold chunk at rank 6–10), fix queued (local cross-encoder rerank; see
 [`docs/FUTURE.md`](docs/FUTURE.md)).
 
-## 4. Key design decisions (each: what / why)
+## 4. `sanechips-rag` branch — JD-focused knowledge-construction upgrades
+
+This branch is for the 中兴微 / Sanechips RAG interview track. The main system already proves
+grounded RAG, HANA vector search, hybrid retrieval, refusal gates, and eval. This branch frames
+the next layer around **knowledge extraction, corpus rebuild quality, and retrieval iteration**.
+
+**Scope note:** the live trace-harness / Codex skill idea is deliberately deferred. The cheaper
+branch focus is corpus-time intelligence: make better retrievable units, richer metadata, and
+stronger eval reports before changing the serving loop.
+
+| upgrade | design intent | where it fits |
+|---|---|---|
+| **Doc2Query / query-aligned retrieval** | Generate likely user questions per chunk, so matching can happen as query→question as well as query→source prose. | post-chunk corpus rebuild |
+| **Fielded sparse search** | BM25 over weighted fields: `text`, `section_path`, `entities`, `topic_label`, generated questions. Exact SAP terms still matter. | sparse retrieval |
+| **Dual dense representations** | Keep raw chunk embeddings for provenance, add separate generated-question embeddings for query alignment; score both and weight/fuse. | dense retrieval |
+| **Multi-route RRF** | Fuse `dense_chunk`, `dense_question`, `bm25_text`, `bm25_question`, and optional metadata-filtered routes by Reciprocal Rank Fusion. | retrieval core |
+| **Final rerank** | Cross-encoder rerank top-N after fusion; do this only after recall is high enough and latency budget is known. | precision@top |
+| **Pre-index dedup** | After chunking, group exact/near duplicates and keep the newest chunk as canonical; preserve older sources as aliases/provenance. | corpus governance |
+| **Entity/event metadata** | Extract SAP products, SQL functions, units, metrics, actions/events (`create deployment`, `delete prompt`, etc.) for filters and future graph retrieval. | metadata sidecar |
+| **Topic clustering** | Assign `topic_id`, `topic_label`, and confidence to chunks for routing, coverage analysis, and per-topic eval. | metadata sidecar |
+| **Quality reports** | Add parse/chunk/retrieval reports: duplicate groups, topic coverage, entity coverage, oversized tables, missing parents, Recall@K/MRR/nDCG. | eval + governance |
+| **RAGAS second check** | Convert existing eval outputs into RAGAS samples as a standardized reporting layer, not a replacement for our citation/refusal gates. | eval reporting |
+
+The intended Doc2Query path is:
+
+```text
+chunk text
+  -> generate 3-5 likely questions per chunk
+  -> sparse routes: weighted BM25 over text fields + generated-question fields
+  -> dense routes: embed chunk text and generated questions separately
+  -> RRF fuse all routes
+  -> deterministic dedup
+  -> optional cross-encoder rerank
+  -> answer with citations to original chunk ids only
+```
+
+Important invariant: generated questions, entities, and topics are **metadata / derived
+representations**, not replacements for source truth. Final answers still cite original chunk IDs.
+
+## 5. JD gap closure — low-hanging improvements to show breadth
+
+These are intentionally small, interview-visible increments. Each can be implemented as a
+script/report without destabilizing the working RAG demo.
+
+| JD area | low-hanging item | concrete artifact |
+|---|---|---|
+| 多格式文档解析 | Add a note linking this repo's PDF/HTML/Docling work with the caries repo's Word-doc + chart-image extraction. | `docs/JD_ZXMICRO.md` |
+| 多格式文档解析 | Add a DOCX parser stub using `python-docx` or Docling to prove the ingestion interface is format-extensible. | `ingest/parse_docx.py` |
+| 表格理解 | Split oversized Markdown tables by row groups with repeated headers, while preserving table provenance. | `ingest/split_large_tables.py` |
+| 图表理解 | Add a design stub for chart/image extraction using the caries pattern: crop/split image regions, VLM-to-JSON, validate schema. | `docs/JD_ZXMICRO.md` |
+| 切分策略 | Add an ablation report comparing current structure-aware chunks vs smaller/larger chunk sizes on hit-rate@k. | `eval/chunk_ablation.py` |
+| 实体抽取 | Extract product/function/unit/action entities from chunks with regex + optional LLM pass. | `ingest/entities.jsonl` |
+| 事件抽取 | Extract operational events from docs: create/delete/deploy/list/update/serve/run. | `ingest/events.jsonl` |
+| 主题聚类 | Cluster chunk embeddings; store `topic_id`, `topic_label`, representative chunks. | `ingest/topics.jsonl` |
+| 去重 | Add corpus-time exact/near-dup grouping; choose newest `doc_version` as canonical and keep aliases. | `ingest/dedup_report.md` |
+| 检索优化 | Add Doc2Query sidecar and multi-route RRF over raw chunks + generated questions. | `ingest/doc2query.jsonl`, retrieval route |
+| 评测体系 | Add Recall@K, MRR, and nDCG next to current hit-rate/citation/refusal gates. | `eval/ranking_metrics.py` |
+| 评测体系 | Add RAGAS as optional second-check reporting over existing result rows. | `eval/ragas_eval.py` |
+| 知识治理 | Add corpus-quality report: duplicate rate, missing metadata, topic coverage, entity coverage, table coverage. | `ingest/out/quality_report.md` |
+| 生产落地 | Add a load/latency smoke script that replays 20 queries and reports p50/p95. | `eval/load_smoke.py` |
+| GraphRAG 加分项 | Add entity co-occurrence graph export for Neo4j/NebulaGraph-style demo, without changing retrieval yet. | `ingest/kg_edges.jsonl` |
+
+Interview framing:
+
+> "The current system already has reliable grounded RAG. On this branch I would extend the
+> knowledge-construction layer: Doc2Query for query alignment, corpus-time dedup, entity/event
+> extraction, topic clustering, richer ranking metrics, and RAGAS as a second check. My caries
+> project covers the multimodal Word/chart/image side, while this repo covers production RAG,
+> retrieval optimization, HANA vector storage, and eval governance."
+
+## 6. Key design decisions (each: what / why)
 
 | decision | why |
 |---|---|
@@ -91,7 +161,7 @@ Known weak spot: **cross-doc questions** (faith 0.9 / corr 0.8) — diagnosed as
 | **Config-driven everything** (`config.py`, `providers.py`, `prompts.py`) | no hardcoded models/prompts/params; provider adapter makes OpenAI→SAP Gen AI Hub a config change |
 | **CI as quality gate** | every PR: lint + unit tests; retrieval-touching PRs: deterministic eval gates (hit-rate ≥ 70%, refusal separation); **nightly rebuilds from live SAP docs = drift detection** with a triage matrix (corpus-hash diff × gate verdict) |
 
-## 5. Ownership & governance — who computes what, who stores what
+## 7. Ownership & governance — who computes what, who stores what
 
 Verified empirically on the live instance (registry: `gates-hana` — **identical gate results
 on both stores**, dev/prod parity measured). Three reasons a piece runs where it runs:
@@ -117,7 +187,7 @@ never crosses a third-party boundary; the **(D)** rows (chunking, RRF, refusal, 
 the app because they belong there. The provider adapter and `VectorStore` interface mean those
 moves are config changes, not rewrites.
 
-## 6. Module map
+## 8. Module map
 
 | module | path | inspect with |
 |---|---|---|
@@ -129,7 +199,7 @@ moves are config changes, not rewrites.
 | eval & gates | `eval/` (gold/, scorers, judge, gates, registry) | [`eval/README.md`](eval/README.md) — incl. drill-down recipe |
 | CI | `.github/workflows/` + `tests/` | `pytest && ruff check . && PYTHONPATH=. python3 eval/gates.py` |
 
-## 7. Run it
+## 9. Run it
 
 ```bash
 pip install -e ".[dev]"                        # or: uv sync

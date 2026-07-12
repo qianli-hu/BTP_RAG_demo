@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Karpathy's LLM Wiki pattern — the schema/config layer explained</title>
+<style>
+  body{background:#0d1117;color:#c9d1d9;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;
+       max-width:1000px;margin:0 auto;padding:32px 24px;line-height:1.6}
+  h1{font-size:23px;margin:0 0 4px} h2{font-size:18px;color:#9db8d8;margin:32px 0 8px;
+     border-bottom:1px solid #21262d;padding-bottom:6px} h3{font-size:15px;color:#e6edf3;margin:18px 0 6px}
+  .sub{color:#8b949e;margin:0 0 18px}
+  svg{width:100%;height:auto;background:#0d1117;border:1px solid #21262d;border-radius:10px;margin:10px 0}
+  code{background:#161b22;padding:1px 6px;border-radius:4px;color:#7fc7a4;font-size:13px}
+  pre{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:12px 14px;overflow-x:auto;font-size:12.5px;color:#c9d1d9}
+  table{border-collapse:collapse;width:100%;margin:10px 0}
+  td,th{border:1px solid #21262d;padding:8px 11px;text-align:left;font-size:14px;vertical-align:top} th{color:#9db8d8}
+  b{color:#e6edf3} ul li,ol li{margin:5px 0}
+  .box{background:#11181f;border:1px solid #21262d;border-radius:8px;padding:12px 16px;margin:10px 0}
+  .y{color:#c08a1e;font-weight:700}
+</style>
+</head>
+<body>
+<h1>Karpathy's "LLM Wiki" pattern</h1>
+<p class="sub">A retrieval alternative (April 2026): compile the corpus into an LLM-maintained wiki <i>once</i>,
+then answer questions by reading it — no embeddings, no vector DB. Focus below: the <b>schema/config</b> layer.</p>
+
+<svg viewBox="0 0 1120 430" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8b949e"/></marker>
+    <marker id="ad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#c08a1e"/></marker>
+  </defs>
+  <style>
+    .t{fill:#fff;font-size:14px;font-weight:700;text-anchor:middle} .s{fill:#e6edf3;font-size:11px;text-anchor:middle;opacity:.9}
+    .lbl{fill:#8b949e;font-size:11px;text-anchor:middle} .dl{fill:#c08a1e;font-size:11px;text-anchor:middle;font-weight:700}
+    .e{stroke:#8b949e;stroke-width:1.6;fill:none;marker-end:url(#a)} .de{stroke:#c08a1e;stroke-width:1.6;fill:none;marker-end:url(#ad);stroke-dasharray:5 4}
+  </style>
+
+  <!-- SCHEMA band (top, governs everything) -->
+  <rect x="300" y="20" width="520" height="60" rx="9" fill="#c08a1e"/>
+  <text x="560" y="44" class="t">SCHEMA / config  (CLAUDE.md · AGENTS.md)</text>
+  <text x="560" y="64" class="s">the rules: structure · naming · ingestion workflow · conflict policy · citation standards</text>
+  <path class="de" d="M560,80 L560,150"/>
+  <text x="610" y="120" class="dl">directs every action</text>
+
+  <!-- Raw sources -->
+  <rect x="30" y="160" width="170" height="92" rx="9" fill="#3b6ea5"/>
+  <text x="115" y="196" class="t">Raw sources</text>
+  <text x="115" y="216" class="s">immutable</text>
+  <text x="115" y="232" class="s">PDFs · pages · data</text>
+
+  <!-- LLM agent -->
+  <rect x="470" y="150" width="180" height="112" rx="9" fill="#6e56a6"/>
+  <text x="560" y="186" class="t">LLM agent</text>
+  <text x="560" y="206" class="s">ingests sources →</text>
+  <text x="560" y="222" class="s">writes/maintains wiki;</text>
+  <text x="560" y="238" class="s">answers queries</text>
+
+  <!-- The wiki -->
+  <rect x="900" y="140" width="200" height="132" rx="9" fill="#2e9e6b"/>
+  <text x="1000" y="168" class="t">The WIKI</text>
+  <text x="1000" y="190" class="s">index.md  (TOC + 1-line</text>
+  <text x="1000" y="205" class="s">summaries)</text>
+  <text x="1000" y="226" class="s">topic pages (cross-linked)</text>
+  <text x="1000" y="247" class="s">log.md  (append-only)</text>
+
+  <path class="e" d="M200,200 L468,200"/>
+  <text x="334" y="192" class="lbl">ingest</text>
+  <path class="e" d="M650,190 L898,180"/>
+  <text x="775" y="172" class="lbl">writes pages + index + log</text>
+  <path class="e" d="M898,235 L652,230"/>
+  <text x="775" y="252" class="lbl">reads index → drills pages</text>
+
+  <!-- query in / answer out -->
+  <text x="560" y="300" class="lbl">QUERY: question → agent reads index → opens relevant pages → synthesizes answer + citations</text>
+  <text x="560" y="320" class="dl">good answers get filed BACK as new wiki pages → knowledge compounds</text>
+
+  <line x1="30" y1="348" x2="1090" y2="348" stroke="#30363d"/>
+  <text x="30" y="372" class="lbl" text-anchor="start">Compile ONCE (during ingest) — cross-references &amp; contradictions resolved up front —</text>
+  <text x="30" y="390" class="lbl" text-anchor="start">so every later query is faster and more coherent. Contrast: vector RAG re-derives from fragments every question.</text>
+</svg>
+
+<h2>The three layers</h2>
+<table>
+<tr><th>layer</th><th>who owns it</th><th>what it is</th></tr>
+<tr><td><b>Raw sources</b></td><td>you (immutable)</td><td>your curated documents. The LLM <i>reads</i> them, never edits them.</td></tr>
+<tr><td><b>The wiki</b></td><td>the LLM (entirely)</td><td>a directory of markdown pages it creates/updates, with cross-references kept consistent, fronted by <code>index.md</code> + <code>log.md</code>.</td></tr>
+<tr><td><b>The schema</b></td><td>you + the LLM (co-evolved)</td><td>a config doc (<code>CLAUDE.md</code> / <code>AGENTS.md</code>) telling the agent <i>how</i> the wiki is structured and what workflows to follow.</td></tr>
+</table>
+
+<h2>The schema/config layer — the load-bearing part</h2>
+<p>Karpathy calls it <span class="y">"the key configuration file — what makes the LLM a disciplined wiki maintainer
+rather than a generic chatbot."</span> It's plain markdown, <b>human-editable</b>, and you and the agent
+<b>co-evolve it over time</b>. It documents three kinds of thing:</p>
+
+<h3>1. Structural conventions</h3>
+<ul>
+  <li>directory organization &amp; file naming</li>
+  <li>frontmatter format (the metadata block atop each page)</li>
+  <li>page types (e.g. <i>entity</i> pages, <i>concept</i> pages, <i>summary</i> pages, <i>analysis</i> pages)</li>
+</ul>
+
+<h3>2. Workflow procedures</h3>
+<ul>
+  <li>how to <b>ingest</b> a new source (steps below)</li>
+  <li>how to <b>handle contradictions</b> between sources</li>
+  <li>how to <b>update cross-references</b> when pages change</li>
+  <li>when to run a <b>lint pass</b> (consistency check across the wiki)</li>
+</ul>
+
+<h3>3. Quality standards</h3>
+<ul>
+  <li>citation requirements (every claim links back to a raw source)</li>
+  <li>contradiction <b>severity levels</b> (see below)</li>
+  <li>freshness checks (is a page stale vs newer sources?)</li>
+</ul>
+
+<h2>Ingestion workflow (what the schema makes the agent do)</h2>
+<p>On a new source, the agent:</p>
+<ol>
+  <li>reads the source and <b>discusses key takeaways</b> with you;</li>
+  <li>writes a <b>summary page</b>;</li>
+  <li>updates <code>index.md</code>;</li>
+  <li>updates relevant <b>entity and concept pages</b> across the wiki;</li>
+  <li>appends an entry to <code>log.md</code>.</li>
+</ol>
+<p class="box"><span class="y">Scale note:</span> "a single source might touch <b>10–15 wiki pages</b>." That fan-out
+is the whole point — the synthesis (cross-links, contradictions) is done <i>at ingest</i>, not re-derived per query.</p>
+
+<h3>Conflict resolution (tiered severity)</h3>
+<table>
+<tr><th>severity</th><th>behavior</th></tr>
+<tr><td><b>hard contradiction</b></td><td><b>stops the ingestion run</b>, holds the commit, sends a notification — wait for manual resolution with a documented justification.</td></tr>
+<tr><td><b>soft contradiction</b></td><td><b>flagged, referenced, compared, explained</b> — but non-blocking.</td></tr>
+</table>
+
+<h2>Query workflow — no embeddings</h2>
+<p>Two special files replace the vector DB:</p>
+<ul>
+  <li><code>index.md</code> — a catalog of every page: link + one-line summary + optional metadata. <b>The agent reads this first</b>, then drills into the relevant pages. "Works surprisingly well at moderate scale (~100 sources, ~hundreds of pages)."</li>
+  <li><code>log.md</code> — append-only record of ingests/queries/lint passes, "parseable with simple unix tools."</li>
+</ul>
+<p>To answer: <b>read index → open relevant pages → synthesize an answer with citations.</b> And crucially —
+<b>good answers get filed back into the wiki as new pages</b>, so a question you ask once becomes a compounding
+asset instead of disappearing into chat history.</p>
+
+<h2>Core insight — and how it relates to BTP_RAG</h2>
+<p><b>Compile once, query many.</b> Vector RAG re-discovers knowledge from fragments on <i>every</i> question;
+the wiki accumulates compiled synthesis, so cross-references and contradictions are resolved <b>up front</b>,
+making later queries faster <i>and</i> more coherent.</p>
+<table>
+<tr><th></th><th>BTP_RAG (vector RAG)</th><th>LLM Wiki</th></tr>
+<tr><td>index</td><td>embeddings in a vector store</td><td><code>index.md</code> (a TOC the agent reads)</td></tr>
+<tr><td>retrieval</td><td>cosine + BM25 → top-k fragments</td><td>agent reasons over the index, opens pages</td></tr>
+<tr><td>corpus prep</td><td>chunk + embed</td><td>LLM synthesizes interlinked pages</td></tr>
+<tr><td>best at</td><td>large corpora, low latency, cheap per query</td><td>moderate scale, deep cross-referenced synthesis</td></tr>
+<tr><td>cost shape</td><td>cheap query, cheap build</td><td>expensive build, then cheap-ish reads</td></tr>
+</table>
+<p>It's the far end of the same spectrum as our <code>FUTURE.md</code> §11 thesis — <b>spend the compute on
+corpus structure, not the matcher.</b> Our chunker already extracts a heading tree (<code>section_path</code>,
+<code>parent_section_id</code>); the wiki takes that idea to its limit (an LLM <i>writes</i> the structure).
+For our 3 well-structured SAP docs it's a plausible v3 experiment; the cheaper near-term moves remain
+doc2query / reasoning-over-our-existing-TOC.</p>
+</body>
+</html>

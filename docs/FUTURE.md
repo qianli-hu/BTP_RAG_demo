@@ -53,8 +53,17 @@ grounded in retrieved context — the anti-hallucination metric), **answer relev
 majority/mean to cut judge variance; **calibrate** the judge against a small human-labeled
 subset; score **per-claim** rather than whole-answer.
 
+**Layer C — RAGAS as a secondary standard check**: add an optional adapter that converts
+`eval/out/results.jsonl` + `eval/gold/*.jsonl` + `ingest/out/chunks.jsonl` into RAGAS samples:
+`user_input`, `response`, `retrieved_contexts`, `reference`, and retrieved/reference chunk ids.
+Use it for familiar benchmark-style metrics such as faithfulness, answer relevance,
+factual correctness, context precision, and context recall. RAGAS should **not** replace
+our gates: exact refusal, chunk-id citation validity, HANA hit-rate@k, and fingerprinted
+registry runs remain project-owned because they encode our production contract.
+
 > **Verdict:** Layer A (all rule checks) + single-judge faithfulness/relevance → **pull to v1**.
-> Judge panels, calibration, per-claim attribution → v2.
+> RAGAS adapter → v1.5 secondary check / reporting layer. Judge panels, calibration,
+> per-claim attribution → v2.
 
 ## 2. Citation verification
 
@@ -398,6 +407,7 @@ extraction* within it — the small-to-big shape we already have, with a reasoni
 |---|---|---|
 | Rule/code eval (§1A) | hit-rate@k, citation-valid, exact-negative, structural | — |
 | LLM-judge (§1B) | single-judge faithfulness/relevance | judge panel, calibration, per-claim |
+| RAGAS adapter (§1C) | optional second-check report over existing eval outputs | standardized benchmark tracking + ID-based context precision/recall after adding `gold_chunk_ids` |
 | Citation verification (§2) | existence + in-retrieved-set check | NLI/entailment per citation |
 | Regression dataset (§3) | capture initial passing snapshot | full diff-gated CI on change-history |
 | Reranker (§4) | optional local cross-encoder on top-k if retrieval quality needs it | HANA in-DB `CROSS_ENCODE` |

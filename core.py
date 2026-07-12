@@ -9,10 +9,15 @@ import time
 
 import config
 import prompts
-from retrieve.generate import generate
+from retrieve.generate import generate, generate_stream
 from retrieve.hybrid import Retriever
 
 LOG = "eval/out/requests.jsonl"
+
+def _log(trace):
+    os.makedirs(os.path.dirname(LOG), exist_ok=True)
+    with open(LOG, "a", encoding="utf-8") as f:
+        f.write(json.dumps(trace, ensure_ascii=False) + "\n")
 
 class Engine:
     def __init__(self):
@@ -42,10 +47,46 @@ class Engine:
             "cost": (u["cost"] if u else 0.0),
         }
         if log:
-            os.makedirs(os.path.dirname(LOG), exist_ok=True)
-            with open(LOG, "a", encoding="utf-8") as f:
-                f.write(json.dumps(trace, ensure_ascii=False) + "\n")
+            _log(trace)
         return trace
+
+    def ask_stream(self, query, filters=None, log=True):
+        """Streaming twin of ask(): yields ("token", text)... then ("done", trace).
+        Same retrieval, same gates — plus TTFT (time-to-first-token) in latency_ms."""
+        t0 = time.perf_counter()
+        hits, dbg = self.retriever.retrieve(query, k=config.TOP_K, filters=filters)
+        t1 = time.perf_counter()
+        top_cos = dbg["dense"][0][1] if dbg["dense"] else 0.0
+
+        ttft, gen = None, None
+        for kind, payload in generate_stream(query, hits, top_cosine=top_cos):
+            if kind == "token":
+                if ttft is None:
+                    ttft = time.perf_counter()
+                yield "token", payload
+            else:
+                gen = payload
+        t2 = time.perf_counter()
+
+        u = gen["usage"]
+        trace = {
+            "query": query, "filters": filters, "stream": True,
+            "fingerprint": config.fingerprint(prompt_version=prompts.VERSION),
+            "top_cosine": round(top_cos, 4),
+            "retrieved": [{"id": h["id"], "doc": h["doc"], "section_path": h["section_path"],
+                           "source_url": h["source_url"], "score": h["score"]} for h in hits],
+            "answer": gen["answer"], "citations": gen["citations"],
+            "answerable": gen["answerable"], "gated": gen["gated"],
+            "latency_ms": {"retrieve": round((t1 - t0) * 1000),
+                           "ttft": (round((ttft - t0) * 1000) if ttft else None),
+                           "generate": round((t2 - t1) * 1000),
+                           "total": round((t2 - t0) * 1000)},
+            "tokens": ({"prompt": u["prompt_tokens"], "completion": u["completion_tokens"]} if u else None),
+            "cost": (u["cost"] if u else 0.0),
+        }
+        if log:
+            _log(trace)
+        yield "done", trace
 
 
 def main():

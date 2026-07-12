@@ -68,6 +68,9 @@ RERANK_TOP_N   = _int("RERANK_TOP_N", "30")   # fused candidates reranked before
 # --- generation / refusal gate ---
 SIM_THRESHOLD = _float("SIM_THRESHOLD", "0.56")   # below top-cosine -> refuse (calibrated on negatives)
 NOT_IN_KB     = os.getenv("NOT_IN_KB", "Not in knowledge base.")
+# streaming path only: reasoning models "think" before the first visible token, which kills
+# TTFT — minimal effort trades (measurably little, on grounded QA) depth for fast first paint.
+STREAM_REASONING_EFFORT = os.getenv("STREAM_REASONING_EFFORT", "minimal")  # minimal|low|medium|high
 
 # --- experiment fingerprint (ROADMAP §2): the "model" = the whole config surface ---
 # Stamp this on every eval run + request-log line so any metric is attributable to an
@@ -81,7 +84,7 @@ def fingerprint(prompt_version=None):
         "embed_model": EMBEDDING_MODEL, "answer_model": ANSWER_MODEL, "judge_model": JUDGE_MODEL,
         "dense_k": DENSE_K, "sparse_k": SPARSE_K, "rrf_k": RRF_K, "top_k": TOP_K,
         "rerank": RERANK_MODEL if RERANK_ENABLED else None,
-        "sim_threshold": SIM_THRESHOLD,
+        "sim_threshold": SIM_THRESHOLD, "stream_reasoning_effort": STREAM_REASONING_EFFORT,
         "prompt_version": prompt_version,
         "gold_hash": _gold_hash(),                           # which gold set (content-addressed)
         "corpus_hash": _file_hash("corpus/MANIFEST.json"),   # which corpus snapshot (doc shas+versions)

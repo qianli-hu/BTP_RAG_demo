@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>BTP_RAG — SSE streaming &amp; load/async explained</title>
+<style>
+  body{background:#0d1117;color:#c9d1d9;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;
+       max-width:1000px;margin:0 auto;padding:32px 24px;line-height:1.6}
+  h1{font-size:23px;margin:0 0 4px}
+  h2{font-size:18px;color:#9db8d8;margin:34px 0 8px;border-bottom:1px solid #21262d;padding-bottom:6px}
+  h3{font-size:15px;color:#e6edf3;margin:20px 0 6px}
+  .sub{color:#8b949e;margin:0 0 18px}
+  svg{width:100%;height:auto;background:#0d1117;border:1px solid #21262d;border-radius:10px;margin:10px 0}
+  code{background:#161b22;padding:1px 6px;border-radius:4px;color:#7fc7a4;font-size:13px}
+  pre{background:#161b22;border:1px solid #21262d;border-radius:8px;padding:12px 14px;overflow-x:auto;
+      font-size:13px;color:#c9d1d9}
+  table{border-collapse:collapse;width:100%;margin:10px 0}
+  td,th{border:1px solid #21262d;padding:8px 11px;text-align:left;font-size:14px;vertical-align:top}
+  th{color:#9db8d8}
+  b{color:#e6edf3} .y{color:#c08a1e;font-weight:700} .g{color:#7fc7a4;font-weight:700} .r{color:#e08a8a;font-weight:700}
+  .box{background:#11181f;border:1px solid #21262d;border-radius:8px;padding:12px 16px;margin:10px 0}
+  ol li,ul li{margin:6px 0}
+  .two{display:flex;gap:14px;flex-wrap:wrap} .two>div{flex:1;min-width:280px}
+</style>
+</head>
+<body>
+<h1>SSE streaming &amp; the load/async row — explained</h1>
+<p class="sub">Two things: (1) what streaming is and how you'd <b>test</b> it; (2) row #2 of the serving table, from scratch.</p>
+
+<h2>Part 1 — What "SSE streaming" means</h2>
+
+<p>A <b>normal HTTP request</b> is one round trip: the client asks, the server computes the
+<b>entire</b> answer, sends it back in one lump, done. For an LLM that takes 5–17 s, the user stares
+at a spinner the whole time, then the whole answer appears at once.</p>
+
+<p><b>SSE = Server-Sent Events.</b> The server replies with <code>Content-Type: text/event-stream</code> and
+<b>keeps the connection open</b>, pushing a sequence of small text events as they're ready —
+each one is literally a line <code>data: ...</code>. It's a <b>one-way stream</b> (server → client) over one
+ordinary HTTP connection. (WebSockets are the two-way, heavier cousin; SSE is the simple right tool here.)</p>
+
+<p>An LLM generates <b>one token at a time</b>. OpenAI's API with <code>stream=True</code> hands you those tokens
+as they're produced. So your endpoint forwards each one the instant it arrives, and the UI appends it —
+the answer <b>types itself out</b> like ChatGPT.</p>
+
+<svg viewBox="0 0 1000 220" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    .t{fill:#e6edf3;font-size:13px;font-weight:700} .s{fill:#8b949e;font-size:11.5px}
+    .ax{stroke:#30363d;stroke-width:1} .axt{fill:#8b949e;font-size:11px;text-anchor:middle}
+  </style>
+  <text x="20" y="24" class="t">Same 5 s total — but when does the user first SEE something?</text>
+
+  <!-- WITHOUT -->
+  <text x="20" y="70" class="s">WITHOUT streaming</text>
+  <rect x="150" y="56" width="760" height="22" rx="4" fill="#3a3f47"/>
+  <text x="530" y="72" class="axt" fill="#c9d1d9">nothing visible — spinner for 5 s</text>
+  <rect x="898" y="52" width="14" height="30" rx="3" fill="#2e9e6b"/>
+  <text x="905" y="98" class="axt" fill="#7fc7a4">whole answer</text>
+  <text x="905" y="112" class="axt" fill="#7fc7a4">dumps at 5 s</text>
+
+  <!-- WITH -->
+  <text x="20" y="150" class="s">WITH streaming (SSE)</text>
+  <rect x="150" y="136" width="32" height="22" rx="4" fill="#3a3f47"/>
+  <rect x="182" y="136" width="728" height="22" rx="4" fill="#1f6f6f"/>
+  <text x="546" y="152" class="axt" fill="#e6edf3">tokens type out live, left to right</text>
+  <line x1="182" y1="128" x2="182" y2="186" stroke="#c08a1e" stroke-width="1.5" stroke-dasharray="4 3"/>
+  <text x="182" y="200" class="axt" fill="#c08a1e">first token ~0.7 s (TTFT)</text>
+
+  <!-- axis -->
+  <line x1="150" y1="210" x2="910" y2="210" class="ax"/>
+  <text x="150" y="225" class="axt">0 s</text>
+  <text x="910" y="225" class="axt">5 s</text>
+</svg>
+
+<p><b>The one wrinkle for our system</b> (why it's cheap but not literally free): <code>/ask</code> today returns
+one JSON with <code>answer + citations + judge</code>. But citations are parsed from the <b>complete</b> answer, and
+the judge needs the <b>whole</b> answer. So the streaming flow sends two kinds of events:</p>
+<pre>data: {"type":"token","text":"Use "}      &lt;- repeated, live, as tokens arrive
+data: {"type":"token","text":"the "}
+   ... (many) ...
+data: {"type":"done","citations":[...],"cost":0.0012}   &lt;- once, at the end</pre>
+<p>The prose streams live; <b>citations + judge attach on the final <span class="g">done</span> event</b>.
+Refusals don't stream at all — the score gate fires before any LLM call, so a refusal is instant.</p>
+
+<h2>Part 1b — How you BUILD and TEST it</h2>
+
+<h3>Build (a few hours)</h3>
+<ol>
+  <li>Add a <code>/ask/stream</code> route that calls OpenAI with <code>stream=True</code> and is a Python
+      <b>generator</b>: for each delta, <code>yield "data: ..."</code>.</li>
+  <li>Wrap it: <code>return StreamingResponse(gen, media_type="text/event-stream")</code>.</li>
+  <li>UI reads the stream and appends each token; on the <code>done</code> event it renders citations + judge.</li>
+</ol>
+
+<h3>Test (this is the real question — how do you PROVE it streams?)</h3>
+<table>
+<tr><th>test</th><th>what it checks</th><th>how</th></tr>
+<tr><td><b>curl -N</b> (eyeball)</td><td>tokens actually arrive incrementally, not in one lump</td>
+  <td><code>curl -N localhost:8000/ask/stream -d '...'</code> — the <code>-N</code> disables buffering;
+  you watch words trickle in. If they dump at the end, something is buffering.</td></tr>
+<tr><td><b>TTFT assertion</b></td><td>it's <i>genuinely</i> streaming, not faking it</td>
+  <td>measure time-to-first-chunk vs time-to-last; assert <b>first &lt; ~1.5 s</b> while total is 5 s+.
+  If first ≈ total, it's not streaming.</td></tr>
+<tr><td><b>equivalence</b></td><td>streaming didn't change the <i>content</i></td>
+  <td>collect all token events, reassemble the string, assert it equals the non-streaming
+  <code>/ask</code> answer for the same query.</td></tr>
+<tr><td><b>contract</b></td><td>the structured data still arrives</td>
+  <td>assert the final <code>done</code> event carries <code>citations</code> + <code>cost</code> (so the UI/judge
+  still work).</td></tr>
+<tr><td><b>anti-buffering</b></td><td>no proxy/middleware silently buffers the stream</td>
+  <td>assert the response has <b>no <code>Content-Length</code></b> and uses chunked transfer — the common
+  bug that defeats streaming.</td></tr>
+</table>
+
+<h2>Part 2 — Row #2 decoded: load test → async → connection pool</h2>
+
+<p>Row #2 is really <b>one question: can your service handle many users at once, and how do you make it
+handle more?</b> One user at a time is trivial. 50 users hitting it simultaneously is where services fall over.
+Three ideas stack up.</p>
+
+<h3>(a) Blocking vs async — the root cause</h3>
+<p>Think of your server as <b>a waiter</b>, and each request as <b>a table</b>. Calling OpenAI/HANA is
+<b>"waiting for the kitchen."</b></p>
+<div class="two">
+  <div class="box"><span class="r">BLOCKING (today-ish)</span><br>
+  The waiter takes one table's order, walks to the kitchen, and <b>stands there waiting</b> for the food —
+  ignoring every other table. To serve 10 tables at once you need 10 waiters. Run out of waiters →
+  table 11 waits in line → latency explodes under load.</div>
+  <div class="box"><span class="g">ASYNC</span><br>
+  The waiter takes an order, hands it to the kitchen, and <b>immediately serves the next table</b>. When
+  food is ready the kitchen signals and he delivers it. <b>One</b> waiter serves all 10 tables, because the
+  "waiting" time is spent on others.</div>
+</div>
+<p>Why this is a huge, cheap win <b>for us specifically</b>: your own latency chart says <b>97% of a request
+is spent waiting</b> on OpenAI + HANA — the CPU is idle the whole time. <code>async</code> (the event loop) reclaims
+that idle time so <b>one process serves far more concurrent users</b>, no extra hardware. (Your eval loop
+already uses <b>threads</b> for the same reason — async is just the version that scales to hundreds of
+connections with less overhead.)</p>
+
+<h3>(b) Connection pool</h3>
+<p>Every HANA/OpenAI call needs a <b>connection</b>, and opening one is slow (a TLS handshake, tens of ms).
+A <b>pool</b> keeps a few connections permanently open and <b>reuses</b> them — borrow one per request, return it
+when done — instead of open/close every time.</p>
+<div class="box"><span class="y">A real bug this fixes in our code:</span> <code>HanaStore</code> opens
+<b>one</b> connection + <b>one</b> cursor and reuses it. A single shared cursor is <b>not safe</b> when two
+requests run at once — they corrupt each other's results. The fix is a small <b>pool</b> (one connection per
+in-flight request). The OpenAI SDK already pools its HTTP connections, so that side is mostly handled.</p>
+
+<h3>(c) The load test — you MEASURE the ceiling, you don't guess it</h3>
+<p>A <b>load test</b> (tools: <b>locust</b> in Python, <b>k6</b> in Go) spawns <b>N virtual users</b> hammering
+<code>/ask</code> and records every response time. You ramp N up (10 → 50 → 100) and watch for the point where
+latency spikes or errors start — that's <b>"where it breaks,"</b> your capacity.</p>
+
+<h3>(d) p50 / p95 / p99 and throughput — the vocabulary</h3>
+<table>
+<tr><th>term</th><th>meaning</th></tr>
+<tr><td><b>p50</b> (median)</td><td>half of requests are faster than this</td></tr>
+<tr><td><b>p95</b></td><td>95% are faster — i.e. your slow 5%</td></tr>
+<tr><td><b>p99</b></td><td>the worst 1% — the user who rage-quits</td></tr>
+<tr><td><b>throughput</b></td><td>requests/second the system completes</td></tr>
+</table>
+<p><b>Why percentiles, not the average:</b> say 100 requests — 99 take 2 s, one takes 30 s. The
+<b>average is ~2.3 s</b> (looks great!) but <b>p99 = 30 s</b> — and that one furious user is exactly who you
+lose. <b>Tail latency (p99) is the real UX killer</b>, and the average hides it. async + pool aim to
+<b>raise throughput</b> (more users, same box) while <b>keeping p99 low</b> under load.</p>
+
+<h3>The whole row as a build arc → your demo</h3>
+<ol>
+  <li>Write a locust file (N users POST <code>/ask</code>).</li>
+  <li>Run it on the <b>current</b> service → record <b>baseline</b> p50/p95/p99 + throughput + where it breaks.</li>
+  <li>Convert the hot path to <b>async</b> (<code>AsyncOpenAI</code>, <code>await</code> the calls) + add a HANA <b>pool</b>.</li>
+  <li>Re-run the <b>same</b> test → record the new numbers.</li>
+  <li><b>Demo = the before/after chart:</b> "throughput went X → Y req/s, p99 dropped A → B."</li>
+</ol>
+<div class="box"><span class="y">Honest wrinkle worth knowing (good interview detail):</span> OpenAI ships a native
+<code>AsyncOpenAI</code> client, so that call goes fully async easily. But HANA's driver (<code>hdbcli</code>) is
+<b>synchronous</b> — a blocking DB call would freeze the event loop — so you run it in a thread pool
+(<code>run_in_executor</code>) so it doesn't block. Knowing <i>which</i> dependency is async-native vs needs-a-thread
+is exactly the kind of detail that shows you've actually built this, not just read about it.</p></div>
+</body>
+</html>

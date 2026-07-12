@@ -41,32 +41,49 @@ with st.sidebar:
 - *How do I create a story in SAP Analytics Cloud?* — out of scope → refusal
 """)
 
-# ---- main: ask ----
+# ---- main: ask (streaming — the answer types itself out; metadata rides the final event) ----
 q = st.text_input("Ask about SAP BTP", placeholder="How do I create a vector index in HANA Cloud?")
 if st.button("Ask", type="primary") and q.strip():
-    with st.spinner("retrieving + generating…"):
-        try:
-            r = requests.post(f"{API}/ask", json={"question": q}, timeout=120)
-            r.raise_for_status()
-            d = r.json()
-        except Exception as e:
-            st.error(f"request failed: {e}")
-            st.stop()
+    try:
+        r = requests.post(f"{API}/ask/stream", json={"question": q}, stream=True, timeout=120)
+        r.raise_for_status()
+    except Exception as e:
+        st.error(f"request failed: {e}")
+        st.stop()
 
-    if d["answerable"]:
-        st.markdown(f"### {d['answer']}")
-    else:
-        st.warning(f"🚫 {d['answer']}  \n*(out of corpus scope — refused rather than guessed)*")
+    d = {}                                    # filled by the final "done" event
+
+    def tokens():
+        import json as _json
+        for line in r.iter_lines():
+            if not line.startswith(b"data: "):
+                continue
+            ev = _json.loads(line[6:])
+            if ev["type"] == "token":
+                yield ev["text"]
+            elif ev["type"] == "done":
+                d.update(ev)
+            elif ev["type"] == "error":
+                st.error(f"backend error: {ev['detail']}")
+
+    st.write_stream(tokens())                 # <- live typing
+    if not d:
+        st.stop()
+
+    if not d["answerable"]:
+        st.warning("🚫 *(out of corpus scope — refused rather than guessed)*")
 
     if d["citations"]:
         st.markdown("**Sources**")
         for c in d["citations"]:
             st.markdown(f"- [{c['section_path']}]({c['source_url']}) · `{c['id']}`")
 
-    m1, m2, m3 = st.columns(3)
+    m1, m2, m3, m4 = st.columns(4)
     m1.metric("retrieve", f"{d['latency_ms']['retrieve']} ms")
-    m2.metric("generate", f"{d['latency_ms']['generate']} ms")
-    m3.metric("cost", f"${d['cost']:.4f}")
+    m2.metric("first token", f"{d['latency_ms']['ttft']} ms" if d["latency_ms"].get("ttft") else "—",
+              help="TTFT — how long until the answer started appearing")
+    m3.metric("generate", f"{d['latency_ms']['generate']} ms")
+    m4.metric("cost", f"${d['cost']:.4f}")
 
     # ---- live LLM-as-judge: the answer audits itself (same judge as offline eval) ----
     if judge_on and d["answerable"] and d.get("retrieved_ids"):

@@ -35,3 +35,8 @@ eval/out/results_norag.jsonl
 
 # local working material (screenshots etc.)
 human-input/
+
+# personal career plan — never publish
+/PLAN.md
+INTERVIEW_QA.md
+HARNESS_NOTES.md

@@ -7,7 +7,7 @@ import re
 
 import config
 
-VERSION = "v1"
+VERSION = "v2"   # v2: added streaming answer prompt (plain text + inline citations)
 
 # ---- answer generation (grounded, cited, refusal) ----
 ANSWER_SYSTEM = f"""You are a SAP BTP documentation assistant. Answer the QUESTION using ONLY \
@@ -23,6 +23,24 @@ Return ONLY a JSON object: {{"answer": "...", "citations": ["<chunk_id>", ...], 
 def answer_messages(query, chunks):
     ctx = "\n\n".join(f"[{c['id']}] ({c['doc']} · {c['section_path']})\n{c['text']}" for c in chunks)
     return [{"role": "system", "content": ANSWER_SYSTEM},
+            {"role": "user", "content": f"CONTEXT:\n{ctx}\n\nQUESTION: {query}"}]
+
+# ---- streaming answer variant: JSON can't stream (you can't read half a sealed envelope),
+# ---- so the model writes PLAIN text with inline [chunk-id] citations; we extract the
+# ---- structured parts (citations, answerable) from the finished text afterward. ----
+ANSWER_SYSTEM_STREAM = f"""You are a SAP BTP documentation assistant. Answer the QUESTION using \
+ONLY the numbered CONTEXT passages.
+
+Rules:
+- Use only facts stated in the CONTEXT. Never use outside knowledge.
+- Write the answer as plain, well-formatted text (markdown bullets are fine). Do NOT wrap it in JSON.
+- Cite every passage you used inline by its bracketed id, e.g. [sap-hana-vector#a1b2c3d4e5f6#00].
+- If the QUESTION contains a false premise that the CONTEXT contradicts, correct it using the CONTEXT.
+- If the answer is not present in the CONTEXT, reply with exactly: {config.NOT_IN_KB}"""
+
+def answer_stream_messages(query, chunks):
+    ctx = "\n\n".join(f"[{c['id']}] ({c['doc']} · {c['section_path']})\n{c['text']}" for c in chunks)
+    return [{"role": "system", "content": ANSWER_SYSTEM_STREAM},
             {"role": "user", "content": f"CONTEXT:\n{ctx}\n\nQUESTION: {query}"}]
 
 # ---- LLM-as-judge (faithfulness vs context, correctness vs gold, relevance vs question) ----

@@ -12,6 +12,7 @@ Docs:   http://localhost:8000/docs   (interactive Swagger UI)
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 import config
@@ -107,6 +108,38 @@ def ask(req: AskRequest) -> AskResponse:
     return AskResponse(answer=tr["answer"], answerable=tr["answerable"], citations=cites,
                        retrieved_ids=[r["id"] for r in tr["retrieved"]],
                        latency_ms=tr["latency_ms"], cost=tr["cost"])
+
+
+@app.post("/ask/stream")
+def ask_stream(req: AskRequest):
+    """SSE twin of /ask: many `data: {"type":"token",...}` events as the answer is
+    generated, then one `data: {"type":"done",...}` with citations/latency/cost —
+    the structured parts need the FINISHED text, so they ride the last event.
+    Note: once streaming starts the 200 is already sent, so errors travel in-band."""
+    import json as _json
+
+    def gen():
+        try:
+            for kind, payload in engine.ask_stream(req.question, filters=req.filters):
+                if kind == "token":
+                    yield f"data: {_json.dumps({'type': 'token', 'text': payload})}\n\n"
+                else:                                   # the final trace -> "done" event
+                    cites = []
+                    for cid in payload["citations"]:
+                        m = engine.retriever.meta.get(cid)
+                        if m:
+                            cites.append({"id": cid, "source_url": m["source_url"],
+                                          "section_path": m["section_path"]})
+                    done = {"type": "done", "answer": payload["answer"],
+                            "answerable": payload["answerable"], "citations": cites,
+                            "retrieved_ids": [r["id"] for r in payload["retrieved"]],
+                            "latency_ms": payload["latency_ms"], "cost": payload["cost"]}
+                    yield f"data: {_json.dumps(done, ensure_ascii=False)}\n\n"
+        except Exception as e:
+            yield f"data: {_json.dumps({'type': 'error', 'detail': type(e).__name__})}\n\n"
+
+    return StreamingResponse(gen(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.post("/judge", response_model=JudgeResponse)

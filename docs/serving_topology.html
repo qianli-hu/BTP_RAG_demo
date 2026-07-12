@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>BTP_RAG — serving topology (who calls whom)</title>
+<style>
+  body{background:#0d1117;color:#c9d1d9;font-family:-apple-system,Segoe UI,Helvetica,Arial,sans-serif;
+       max-width:1060px;margin:0 auto;padding:32px 24px;line-height:1.55}
+  h1{font-size:22px;margin:0 0 4px} h2{font-size:16px;color:#9db8d8;margin:30px 0 8px;
+     border-bottom:1px solid #21262d;padding-bottom:6px}
+  .sub{color:#8b949e;margin:0 0 20px}
+  svg{width:100%;height:auto;background:#0d1117;border:1px solid #21262d;border-radius:10px}
+  code{background:#161b22;padding:1px 6px;border-radius:4px;color:#7fc7a4;font-size:13px}
+  table{border-collapse:collapse;width:100%;margin:8px 0}
+  td,th{border:1px solid #21262d;padding:7px 10px;text-align:left;font-size:14px;vertical-align:top}
+  th{color:#9db8d8} .role{color:#c08a1e;font-weight:700}
+  ol{padding-left:22px} li{margin:5px 0} b{color:#e6edf3}
+  .k{color:#7fc7a4}
+</style>
+</head>
+<body>
+<h1>BTP_RAG — serving topology</h1>
+<p class="sub">Who calls whom for one <code>/ask</code>. Request flows left → right; the answer streams back ← .</p>
+
+<svg viewBox="0 0 1240 470" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#8b949e"/></marker>
+    <marker id="ad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#c08a1e"/></marker>
+  </defs>
+  <style>
+    .t{fill:#fff;font-size:14px;font-weight:700;text-anchor:middle}
+    .s{fill:#e6edf3;font-size:11px;text-anchor:middle;opacity:.9}
+    .role{fill:#c9d1d9;font-size:10.5px;font-weight:700;text-anchor:middle}
+    .lbl{fill:#8b949e;font-size:11px;text-anchor:middle}
+    .dlbl{fill:#c08a1e;font-size:11px;text-anchor:middle;font-style:italic}
+    .edge{stroke:#8b949e;stroke-width:1.6;fill:none;marker-end:url(#a)}
+    .dedge{stroke:#c08a1e;stroke-width:1.6;fill:none;marker-end:url(#ad);stroke-dasharray:5 4}
+    .note{fill:#8b949e;font-size:11px;font-style:italic}
+  </style>
+
+  <!-- Browser -->
+  <rect x="30" y="120" width="150" height="92" rx="9" fill="#3b6ea5"/>
+  <text x="105" y="158" class="t">Browser</text>
+  <text x="105" y="178" class="s">Chrome, your laptop</text>
+  <text x="105" y="234" class="role">CLIENT</text>
+
+  <!-- Streamlit -->
+  <rect x="250" y="120" width="195" height="92" rx="9" fill="#6e56a6"/>
+  <text x="347" y="150" class="t">Streamlit UI :8501</text>
+  <text x="347" y="170" class="s">app/ui.py</text>
+  <text x="347" y="188" class="s">presentation</text>
+  <text x="347" y="230" class="role">SERVER to browser</text>
+  <text x="347" y="246" class="role">+ CLIENT to the API</text>
+
+  <!-- FastAPI + core -->
+  <rect x="540" y="95" width="305" height="155" rx="9" fill="#1f6f6f"/>
+  <text x="692" y="120" class="t">FastAPI + uvicorn :8000</text>
+  <text x="692" y="138" class="s">app/main.py — uvicorn runs it</text>
+  <rect x="560" y="152" width="265" height="78" rx="7" fill="#11605f" stroke="#2e9e6b" stroke-width="1.2"/>
+  <text x="692" y="178" class="t" font-size="12.5">core.ask() — your Python</text>
+  <text x="692" y="196" class="s">retrieve (BM25 + dense) · generate</text>
+  <text x="692" y="214" class="s">called IN-PROCESS — no network hop</text>
+  <text x="692" y="270" class="role">SERVER (the API)</text>
+
+  <!-- External -->
+  <rect x="935" y="98" width="250" height="62" rx="9" fill="#b35454"/>
+  <text x="1060" y="124" class="t">OpenAI API</text>
+  <text x="1060" y="143" class="s">embed · gpt-5-mini · judge</text>
+  <rect x="935" y="188" width="250" height="62" rx="9" fill="#b35454"/>
+  <text x="1060" y="214" class="t">HANA Cloud / SQLite</text>
+  <text x="1060" y="233" class="s">vectors + chunks</text>
+  <text x="1060" y="274" class="role">SERVERS (FastAPI is their CLIENT)</text>
+
+  <!-- forward arrows -->
+  <path class="edge" d="M180,158 L248,158"/>
+  <text x="214" y="150" class="lbl">1</text>
+  <path class="edge" d="M445,154 L538,140"/>
+  <text x="492" y="132" class="lbl">2  HTTP POST /ask</text>
+  <text x="492" y="166" class="lbl">{question}</text>
+  <text x="690" y="150" class="lbl" font-size="10">3 direct call</text>
+  <path class="edge" d="M845,170 L933,135"/>
+  <text x="892" y="150" class="lbl">4 HTTPS</text>
+  <path class="edge" d="M845,200 L933,215"/>
+  <text x="889" y="232" class="lbl">4 SQL/TLS</text>
+
+  <!-- return (dashed) -->
+  <path class="dedge" d="M540,230 L447,202"/>
+  <text x="492" y="192" class="dlbl">5 answer JSON</text>
+  <path class="dedge" d="M250,192 L182,185"/>
+  <text x="214" y="100" class="dlbl">6 SSE: tokens</text>
+  <text x="214" y="114" class="dlbl">type out live</text>
+
+  <text x="692" y="300" class="note">warm-up: Engine built ONCE at startup (lifespan) — then stays on; every request after is fast</text>
+
+  <!-- HOST band -->
+  <line x1="30" y1="338" x2="1185" y2="338" stroke="#30363d"/>
+  <rect x="30" y="356" width="560" height="64" rx="8" fill="none" stroke="#3b6ea5" stroke-width="1.3"/>
+  <text x="310" y="380" class="t" font-size="12.5" fill="#9db8d8">HOST — dev: localhost (127.0.0.1), your MacBook</text>
+  <text x="310" y="402" class="s" fill="#8b949e">both processes run here; they die when you Ctrl+C</text>
+  <rect x="620" y="356" width="565" height="64" rx="8" fill="none" stroke="#2e9e6b" stroke-width="1.3"/>
+  <text x="902" y="380" class="t" font-size="12.5" fill="#7fc7a4">HOST — prod: cloud (Cloud Foundry / Kubernetes)</text>
+  <text x="902" y="402" class="s" fill="#8b949e">N always-on replicas · polls /health · auto-restarts on crash · load-balances</text>
+</svg>
+
+<h2>The 6 steps, in words</h2>
+<ol>
+  <li><b>1</b> — You open <code>localhost:8501</code>; your <b>browser</b> talks to the <b>Streamlit</b> process.</li>
+  <li><b>2</b> — You hit "Ask". Streamlit makes an <b>HTTP POST</b> to <code>localhost:8000/ask</code> — here Streamlit is a <span class="role">client</span> of FastAPI.</li>
+  <li><b>3</b> — FastAPI's route handler calls <code>core.ask("question")</code> — an ordinary <b>in-process Python function call</b>, <i>not</i> a network hop. Your whole retrieval+generation engine lives inside this one process.</li>
+  <li><b>4</b> — Inside <code>core.ask</code>, <code>providers</code> calls the <b>OpenAI API</b> (embed + generate) over HTTPS, and the <b>store</b> queries <b>HANA/SQLite</b>. FastAPI is now a <span class="role">client</span> of those.</li>
+  <li><b>5</b> — The answer + citations flow back to Streamlit as JSON.</li>
+  <li><b>6</b> — With <b>SSE</b>, step 5 isn't one lump at the end — tokens stream back piece-by-piece and Streamlit types them out live (citations + judge attach once the full text arrives).</li>
+</ol>
+
+<h2>Client vs Server vs Host</h2>
+<table>
+  <tr><th>term</th><th>meaning</th><th>in our stack</th></tr>
+  <tr><td><span class="role">CLIENT</span></td><td>the thing that <b>starts</b> a request</td><td>Browser · Streamlit (to the API) · FastAPI (to OpenAI/HANA)</td></tr>
+  <tr><td><span class="role">SERVER</span></td><td>the thing that <b>listens &amp; responds</b></td><td>Streamlit (to the browser) · FastAPI (to Streamlit) · OpenAI/HANA</td></tr>
+  <tr><td><span class="role">HOST</span></td><td>the <b>machine</b> a process runs on</td><td>dev: your MacBook (localhost) · prod: cloud host(s)</td></tr>
+</table>
+<p>Key idea: <b>client/server are roles in a single request, not fixed identities.</b> Streamlit is a
+<b>server</b> to your browser <i>and</i> a <b>client</b> to the API at the same time. One host can run many
+servers (here: two processes, ports 8501 and 8000, both on your laptop).</p>
+
+<h2>Your specific questions</h2>
+<p><b>"Is FastAPI a server?"</b> — FastAPI is the <b>framework</b> (a library) that turns <code>core.ask</code> into
+an HTTP endpoint. The actual <b>server process</b> is <code>uvicorn</code> — that's why you run
+<code>uvicorn app.main:app</code>. Colloquially "the FastAPI server" = uvicorn running your FastAPI app.</p>
+<p><b>"…like Swagger?"</b> — Swagger (the page at <code>/docs</code>) is the auto-generated interactive
+<b>documentation + test console</b> for your endpoints. FastAPI builds it for free. It documents the
+service; it isn't the service.</p>
+<p><b>"Is Streamlit built on top of FastAPI?"</b> — <b>No.</b> They're two independent web servers.
+Streamlit serves the UI to your browser and is itself just an HTTP <b>client</b> of FastAPI
+(<code>requests.post(...)</code> in <code>ui.py</code>). You could delete Streamlit and call <code>/ask</code> with
+<code>curl</code>, or delete FastAPI and call <code>core.ask()</code> in a Python REPL — each layer is optional.</p>
+<p><b>"Constantly on, or warm-up?"</b> — The uvicorn process runs <b>continuously</b> once started (a loop
+accepting connections) until you Ctrl+C. There's a <b>one-time warm-up</b> at boot: the <code>lifespan</code>
+builds <code>Engine()</code> once (loads chunks, builds the BM25 index ~38 ms, warms caches). After that every
+request is fast — that's exactly why the engine is built at startup, not per request.</p>
+<p><b>"In production, how is it kept always-on?"</b> — You don't run <code>uvicorn</code> by hand. You hand the
+process to an <b>orchestrator</b> (Cloud Foundry via <code>cf push</code>, or Kubernetes) that: runs <b>N replicas</b>
+for capacity + redundancy, <b>health-checks</b> them by polling your <code>/health</code> endpoint, <b>auto-restarts</b>
+crashed ones, and <b>load-balances</b> across them. So yes — it's mostly declarative: you state "keep 3
+healthy instances alive" and the platform enforces it. That is literally what <code>/health</code> is <i>for</i>.</p>
+</body>
+</html>
