@@ -4,8 +4,13 @@ retrieve/generate.py — grounded answer generation with the two-layer refusal g
   layer 1 (cheap): if the top dense cosine < SIM_THRESHOLD -> refuse with NO LLM call.
   layer 2 (LLM):   the prompt instructs the model to refuse if the answer isn't in context.
 
-generate()        -> {answer, citations, answerable, usage, gated}  (one JSON parcel)
-generate_stream() -> yields ("token", text)... then ("done", same dict)  (SSE path)
+ONE code path (BUILD_PLAN §2.5): generate_stream() is the canonical generation;
+generate() is its buffered wrapper (consumes the stream, returns the final dict) — so
+/ask, /ask/stream, and the eval harness all exercise IDENTICAL generation logic, and
+"streaming" is purely a transport difference.
+
+generate()        -> {answer, citations, answerable, usage, gated}
+generate_stream() -> yields ("token", text)... then ("done", same dict)
 Citations are chunk ids.
 """
 import re
@@ -30,24 +35,11 @@ def _extract_citations(text, hits):
 
 
 def generate(query, hits, top_cosine=None):
-    # layer-1 refusal: best chunk below the calibrated threshold -> out-of-KB, skip the LLM
-    if top_cosine is not None and top_cosine < config.SIM_THRESHOLD:
-        return {"answer": config.NOT_IN_KB, "citations": [], "answerable": False,
-                "usage": None, "gated": "score"}
-
-    text, usage = providers.chat(prompts.answer_messages(query, hits[:config.TOP_K]),
-                                 model=config.ANSWER_MODEL)
-    d = prompts.parse_json(text) or {}
-    answer = (d.get("answer") or text).strip()
-    citations = d.get("citations") or []
-    answerable = d.get("answerable", True)
-
-    # layer-2 refusal: model said not-answerable, or emitted the refusal string
-    if not answerable or answer == config.NOT_IN_KB:
-        return {"answer": config.NOT_IN_KB, "citations": [], "answerable": False,
-                "usage": usage, "gated": "llm"}
-    return {"answer": answer, "citations": citations, "answerable": True,
-            "usage": usage, "gated": None}
+    """Buffered wrapper over generate_stream(): same gates, same prompt, same citation
+    extraction — just consumed to completion instead of forwarded token-by-token."""
+    for kind, payload in generate_stream(query, hits, top_cosine=top_cosine):
+        if kind == "done":
+            return payload
 
 
 def generate_stream(query, hits, top_cosine=None):
@@ -62,8 +54,9 @@ def generate_stream(query, hits, top_cosine=None):
 
     acc, usage = [], None
     for kind, payload in providers.chat_stream(
-            prompts.answer_stream_messages(query, hits[:config.TOP_K]),
-            model=config.ANSWER_MODEL):
+            prompts.answer_messages(query, hits[:config.TOP_K]),
+            model=config.ANSWER_MODEL,
+            reasoning_effort=config.ANSWER_REASONING_EFFORT):
         if kind == "token":
             acc.append(payload)
             yield "token", payload

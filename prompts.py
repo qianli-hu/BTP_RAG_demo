@@ -6,29 +6,17 @@ import json
 import re
 
 import config
+import views
 
-VERSION = "v2"   # v2: added streaming answer prompt (plain text + inline citations)
+VERSION = "v3"   # v3: ONE canonical answer protocol (plain text + inline [chunk-id]
+                 # citations) for ALL serving+eval paths; the JSON-envelope answer prompt
+                 # is retired — JSON is assembled by the endpoint, never by the model
+                 # (BUILD_PLAN §2.5, review finding 1). v2 had two diverging protocols.
 
-# ---- answer generation (grounded, cited, refusal) ----
-ANSWER_SYSTEM = f"""You are a SAP BTP documentation assistant. Answer the QUESTION using ONLY \
-the numbered CONTEXT passages.
-
-Rules:
-- Use only facts stated in the CONTEXT. Never use outside knowledge.
-- Cite every passage you used by its bracketed id, e.g. [sap-hana-vector#a1b2c3#00].
-- If the QUESTION contains a false premise that the CONTEXT contradicts, correct it using the CONTEXT.
-- If the answer is not present in the CONTEXT, set answerable=false and reply with exactly: {config.NOT_IN_KB}
-Return ONLY a JSON object: {{"answer": "...", "citations": ["<chunk_id>", ...], "answerable": true|false}}"""
-
-def answer_messages(query, chunks):
-    ctx = "\n\n".join(f"[{c['id']}] ({c['doc']} · {c['section_path']})\n{c['text']}" for c in chunks)
-    return [{"role": "system", "content": ANSWER_SYSTEM},
-            {"role": "user", "content": f"CONTEXT:\n{ctx}\n\nQUESTION: {query}"}]
-
-# ---- streaming answer variant: JSON can't stream (you can't read half a sealed envelope),
-# ---- so the model writes PLAIN text with inline [chunk-id] citations; we extract the
-# ---- structured parts (citations, answerable) from the finished text afterward. ----
-ANSWER_SYSTEM_STREAM = f"""You are a SAP BTP documentation assistant. Answer the QUESTION using \
+# ---- answer generation (grounded, cited, refusal) — THE canonical contract ----
+# Plain text streams (JSON can't: you can't read half a sealed envelope); citations are
+# extracted + validated from the finished text; /ask buffers the same generation.
+ANSWER_SYSTEM = f"""You are a SAP BTP documentation assistant. Answer the QUESTION using \
 ONLY the numbered CONTEXT passages.
 
 Rules:
@@ -38,9 +26,9 @@ Rules:
 - If the QUESTION contains a false premise that the CONTEXT contradicts, correct it using the CONTEXT.
 - If the answer is not present in the CONTEXT, reply with exactly: {config.NOT_IN_KB}"""
 
-def answer_stream_messages(query, chunks):
-    ctx = "\n\n".join(f"[{c['id']}] ({c['doc']} · {c['section_path']})\n{c['text']}" for c in chunks)
-    return [{"role": "system", "content": ANSWER_SYSTEM_STREAM},
+def answer_messages(query, chunks):
+    ctx = "\n\n".join(views.build_answering_context(c) for c in chunks)
+    return [{"role": "system", "content": ANSWER_SYSTEM},
             {"role": "user", "content": f"CONTEXT:\n{ctx}\n\nQUESTION: {query}"}]
 
 # ---- LLM-as-judge (faithfulness vs context, correctness vs gold, relevance vs question) ----
@@ -54,7 +42,9 @@ Return ONLY JSON: {"faithfulness": 0-1, "correctness": 0-1, "relevance": 0-1, \
 "unsupported_claims": ["..."], "rationale": "one sentence"}"""
 
 def judge_messages(question, chunks, answer, gold):
-    ctx = "\n\n".join(f"[{c['id']}] {c['text']}" for c in chunks)
+    # THE invariant (BUILD_PLAN §2.3): the judge's context is rendered by the SAME
+    # builder as the answering view — the judge scores exactly what the model saw.
+    ctx = "\n\n".join(views.build_judge_context(c) for c in chunks)
     return [{"role": "system", "content": JUDGE_SYSTEM},
             {"role": "user", "content": f"QUESTION: {question}\n\nCONTEXT:\n{ctx}\n\n"
                                         f"ANSWER: {answer}\n\nGOLD EXPECTED: {gold}"}]

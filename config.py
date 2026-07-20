@@ -68,9 +68,32 @@ RERANK_TOP_N   = _int("RERANK_TOP_N", "30")   # fused candidates reranked before
 # --- generation / refusal gate ---
 SIM_THRESHOLD = _float("SIM_THRESHOLD", "0.56")   # below top-cosine -> refuse (calibrated on negatives)
 NOT_IN_KB     = os.getenv("NOT_IN_KB", "Not in knowledge base.")
-# streaming path only: reasoning models "think" before the first visible token, which kills
-# TTFT — minimal effort trades (measurably little, on grounded QA) depth for fast first paint.
-STREAM_REASONING_EFFORT = os.getenv("STREAM_REASONING_EFFORT", "minimal")  # minimal|low|medium|high
+# reasoning effort (gpt-5 family), SPLIT on purpose (BUILD_PLAN review finding 1): the
+# answer path and the judge are independent knobs, passed EXPLICITLY at each call site —
+# a shared knob would let an answer-side sweep silently change the judge.
+# Answer default "low" = the M1.1 dev-sweep operating point (2026-07-19 registry rows):
+#   minimal = 33% false refusals (false-premise 6/6 — premise correction needs reasoning);
+#   low     = 0 false refusals / 48 runs, corr 0.989, TTFT ~½ of medium;
+#   medium  = same refusals/quality as low, 2× TTFT. Judge None -> provider default.
+ANSWER_REASONING_EFFORT = os.getenv("ANSWER_REASONING_EFFORT", "low")  # minimal|low|medium|high
+JUDGE_REASONING_EFFORT  = os.getenv("JUDGE_REASONING_EFFORT", "") or None
+
+# --- provenance view policy (BUILD_PLAN §2.2/§2.4): which node fields each rendered
+# view may see (renderers live in views.py). "judge" resolves BY REFERENCE to the
+# answering view — one builder, two callers, so the judge scores EXACTLY what the model
+# saw (eval-what-you-serve at the judge level). synthetic_queries are retrieval-only BY
+# POLICY: they aid discoverability but are never evidence. Policy changes change
+# results -> the whole dict is part of the fingerprint.
+VIEW_POLICY = {
+    "retrieval": ["source_context", "generated_context", "synthetic_queries", "raw_text"],
+    "answering": ["source_context", "raw_text"],
+    "citation":  ["raw_text"],
+    "judge":     "answering",
+}
+# Staging flag (§2.4): when True, the answering (and therefore judge) view adds
+# generated_context in a LABELED "not citable evidence" block. Default False =
+# retrieval-only staging; flipping it is a fingerprinted A/B, never a silent default.
+ANSWERING_INCLUDES_GENERATED = os.getenv("ANSWERING_INCLUDES_GENERATED", "false").lower() == "true"
 
 # --- experiment fingerprint (ROADMAP §2): the "model" = the whole config surface ---
 # Stamp this on every eval run + request-log line so any metric is attributable to an
@@ -84,7 +107,12 @@ def fingerprint(prompt_version=None):
         "embed_model": EMBEDDING_MODEL, "answer_model": ANSWER_MODEL, "judge_model": JUDGE_MODEL,
         "dense_k": DENSE_K, "sparse_k": SPARSE_K, "rrf_k": RRF_K, "top_k": TOP_K,
         "rerank": RERANK_MODEL if RERANK_ENABLED else None,
-        "sim_threshold": SIM_THRESHOLD, "stream_reasoning_effort": STREAM_REASONING_EFFORT,
+        "sim_threshold": SIM_THRESHOLD,
+        "answer_reasoning_effort": ANSWER_REASONING_EFFORT,
+        "judge_reasoning_effort": JUDGE_REASONING_EFFORT,
+        "store": STORE,
+        "view_policy": VIEW_POLICY,
+        "answering_includes_generated": ANSWERING_INCLUDES_GENERATED,
         "prompt_version": prompt_version,
         "gold_hash": _gold_hash(),                           # which gold set (content-addressed)
         "corpus_hash": _file_hash("corpus/MANIFEST.json"),   # which corpus snapshot (doc shas+versions)

@@ -23,7 +23,8 @@ OUT = "eval/out/results.jsonl"
 
 def judge(question, chunks, answer, gold):
     text, usage = providers.chat(prompts.judge_messages(question, chunks, answer, gold),
-                                 model=config.JUDGE_MODEL)
+                                 model=config.JUDGE_MODEL,
+                                 reasoning_effort=config.JUDGE_REASONING_EFFORT)
     d = prompts.parse_json(text) or {}
     return {"faithfulness": d.get("faithfulness"), "correctness": d.get("correctness"),
             "relevance": d.get("relevance"), "rationale": d.get("rationale"),

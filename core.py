@@ -1,7 +1,8 @@
 """
-core.py — the ONE engine both the online API (/ask) and the offline eval call, so we
-eval exactly what we serve. ask() = retrieve -> generate, and emits a structured
-request-log line (fingerprint + retrieved + answer + per-step latency + tokens + cost).
+core.py — the ONE engine both the online API (/ask, /ask/stream) and the offline eval
+call, so we eval exactly what we serve. ask_stream() is the canonical path
+(retrieve -> generate_stream -> trace + request log); ask() is its buffered wrapper —
+streaming is purely a transport difference (BUILD_PLAN §2.5).
 """
 import json
 import os
@@ -9,7 +10,7 @@ import time
 
 import config
 import prompts
-from retrieve.generate import generate, generate_stream
+from retrieve.generate import generate_stream
 from retrieve.hybrid import Retriever
 
 LOG = "eval/out/requests.jsonl"
@@ -24,35 +25,15 @@ class Engine:
         self.retriever = Retriever()          # builds the BM25 index once; reuse across queries
 
     def ask(self, query, filters=None, log=True):
-        t0 = time.perf_counter()
-        hits, dbg = self.retriever.retrieve(query, k=config.TOP_K, filters=filters)
-        t1 = time.perf_counter()
-        top_cos = dbg["dense"][0][1] if dbg["dense"] else 0.0
-        gen = generate(query, hits, top_cosine=top_cos)
-        t2 = time.perf_counter()
-
-        u = gen["usage"]
-        trace = {
-            "query": query, "filters": filters,
-            "fingerprint": config.fingerprint(prompt_version=prompts.VERSION),
-            "top_cosine": round(top_cos, 4),
-            "retrieved": [{"id": h["id"], "doc": h["doc"], "section_path": h["section_path"],
-                           "source_url": h["source_url"], "score": h["score"]} for h in hits],
-            "answer": gen["answer"], "citations": gen["citations"],
-            "answerable": gen["answerable"], "gated": gen["gated"],
-            "latency_ms": {"retrieve": round((t1 - t0) * 1000),
-                           "generate": round((t2 - t1) * 1000),
-                           "total": round((t2 - t0) * 1000)},
-            "tokens": ({"prompt": u["prompt_tokens"], "completion": u["completion_tokens"]} if u else None),
-            "cost": (u["cost"] if u else 0.0),
-        }
-        if log:
-            _log(trace)
-        return trace
+        """Buffered wrapper over ask_stream(): identical retrieval, gates, generation,
+        logging — the caller just gets the finished trace instead of a token stream."""
+        for kind, payload in self.ask_stream(query, filters=filters, log=log):
+            if kind == "done":
+                return payload
 
     def ask_stream(self, query, filters=None, log=True):
-        """Streaming twin of ask(): yields ("token", text)... then ("done", trace).
-        Same retrieval, same gates — plus TTFT (time-to-first-token) in latency_ms."""
+        """THE canonical path: yields ("token", text)... then ("done", trace).
+        latency_ms includes TTFT (time-to-first-token) alongside retrieve/generate/total."""
         t0 = time.perf_counter()
         hits, dbg = self.retriever.retrieve(query, k=config.TOP_K, filters=filters)
         t1 = time.perf_counter()
@@ -70,7 +51,7 @@ class Engine:
 
         u = gen["usage"]
         trace = {
-            "query": query, "filters": filters, "stream": True,
+            "query": query, "filters": filters,
             "fingerprint": config.fingerprint(prompt_version=prompts.VERSION),
             "top_cosine": round(top_cos, 4),
             "retrieved": [{"id": h["id"], "doc": h["doc"], "section_path": h["section_path"],

@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 import config
 import prompts
+import views
 from core import Engine
 
 engine: Engine | None = None
@@ -94,17 +95,21 @@ def health():
 
 @app.post("/ask", response_model=AskResponse)
 def ask(req: AskRequest) -> AskResponse:
+    """Buffered transport over the SAME canonical generation as /ask/stream (engine.ask
+    wraps engine.ask_stream): the JSON envelope is assembled HERE, never by the model."""
     try:
         tr = engine.ask(req.question, filters=req.filters)
     except Exception as e:                      # provider/store failure -> clean 503, not a crash
         raise HTTPException(status_code=503, detail=f"backend error: {type(e).__name__}") from e
 
-    # resolve citation chunk-ids to source URLs so the client can render links
+    # resolve citation chunk-ids via the citation VIEW (authoritative source identity only)
     cites = []
     for cid in tr["citations"]:
         m = engine.retriever.meta.get(cid)
         if m:
-            cites.append(Citation(id=cid, source_url=m["source_url"], section_path=m["section_path"]))
+            c = views.build_citation(m)
+            cites.append(Citation(id=c["id"], source_url=c["source_url"],
+                                  section_path=c["section_path"]))
     return AskResponse(answer=tr["answer"], answerable=tr["answerable"], citations=cites,
                        retrieved_ids=[r["id"] for r in tr["retrieved"]],
                        latency_ms=tr["latency_ms"], cost=tr["cost"])
@@ -128,8 +133,9 @@ def ask_stream(req: AskRequest):
                     for cid in payload["citations"]:
                         m = engine.retriever.meta.get(cid)
                         if m:
-                            cites.append({"id": cid, "source_url": m["source_url"],
-                                          "section_path": m["section_path"]})
+                            c = views.build_citation(m)
+                            cites.append({"id": c["id"], "source_url": c["source_url"],
+                                          "section_path": c["section_path"]})
                     done = {"type": "done", "answer": payload["answer"],
                             "answerable": payload["answerable"], "citations": cites,
                             "retrieved_ids": [r["id"] for r in payload["retrieved"]],
@@ -153,7 +159,8 @@ def judge(req: JudgeRequest) -> JudgeResponse:
         raise HTTPException(status_code=422, detail="no valid retrieved_ids (judge needs the context)")
     try:
         text, usage = providers.chat(P.live_judge_messages(req.question, chunks, req.answer),
-                                     model=config.JUDGE_MODEL)
+                                     model=config.JUDGE_MODEL,
+                                     reasoning_effort=config.JUDGE_REASONING_EFFORT)
     except Exception as e:
         raise HTTPException(status_code=503, detail=f"judge backend error: {type(e).__name__}") from e
     d = P.parse_json(text) or {}

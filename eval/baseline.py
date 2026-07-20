@@ -32,7 +32,8 @@ IDK_MARKERS = ("i don't know", "i do not know", "not in knowledge base")
 
 def run_one(it):
     answer, usage = providers.chat(prompts.baseline_messages(it["question"]),
-                                   model=config.ANSWER_MODEL)
+                                   model=config.ANSWER_MODEL,
+                                   reasoning_effort=config.ANSWER_REASONING_EFFORT)
     answer = answer.strip()
     row = {"id": it["id"], "answer_type": it["answer_type"], "answer": answer,
            "admitted_unknown": any(m in answer.lower() for m in IDK_MARKERS),
@@ -40,7 +41,8 @@ def run_one(it):
     if it["answer_type"] != "negative" and not row["admitted_unknown"]:
         jtext, jusage = providers.chat(
             prompts.baseline_judge_messages(it["question"], answer, it.get("expected", "")),
-            model=config.JUDGE_MODEL)
+            model=config.JUDGE_MODEL,
+            reasoning_effort=config.JUDGE_REASONING_EFFORT)
         d = prompts.parse_json(jtext) or {}
         row.update(correctness=d.get("correctness"), relevance=d.get("relevance"),
                    judge_cost=jusage["cost"])
