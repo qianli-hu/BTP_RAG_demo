@@ -17,3 +17,6 @@ fastapi>=0.111
 uvicorn[standard]>=0.30
 streamlit>=1.36
 python-dotenv>=1.0
+
+# --- M2.4 store migration (Qdrant server-side hybrid; see docs/HANDOFF.md §3) ---
+qdrant-client[fastembed]>=1.18

@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BTP_RAG — System Design</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --line: #d1d9e0;
+    --card: #f6f8fa; --accent: #0969da; --ok: #1a7f37; --warn: #9a6700; --bad: #cf222e;
+    --code-bg: #f6f8fa;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --line: #3d444d;
+      --card: #161b22; --accent: #4493f8; --ok: #3fb950; --warn: #d29922; --bad: #f85149;
+      --code-bg: #161b22;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0 auto; max-width: 980px; padding: 32px 24px 80px; background: var(--bg);
+         color: var(--fg); font: 16px/1.6 -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+  h1 { font-size: 1.9em; border-bottom: 1px solid var(--line); padding-bottom: .3em; }
+  h2 { font-size: 1.4em; margin-top: 2em; border-bottom: 1px solid var(--line); padding-bottom: .25em; }
+  h3 { font-size: 1.1em; margin-top: 1.6em; }
+  .meta { color: var(--muted); font-size: .9em; }
+  table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: .92em; }
+  th, td { border: 1px solid var(--line); padding: 7px 11px; text-align: left; vertical-align: top; }
+  th { background: var(--card); }
+  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em;
+              background: var(--code-bg); border-radius: 6px; }
+  code { padding: .15em .4em; }
+  pre { padding: 14px 16px; overflow-x: auto; border: 1px solid var(--line); line-height: 1.5; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+          padding: 14px 18px; margin: 1em 0; }
+  .k { color: var(--accent); font-weight: 600; }
+  svg { max-width: 100%; height: auto; display: block; margin: 1.2em auto; }
+  svg text { font: 13px -apple-system, "Segoe UI", sans-serif; fill: var(--fg); }
+  svg .box { fill: var(--card); stroke: var(--line); stroke-width: 1.2; rx: 8; }
+  svg .hot  { stroke: var(--accent); stroke-width: 1.6; }
+  svg .lane { fill: none; stroke: var(--line); stroke-dasharray: 5 5; }
+  svg .arrow { stroke: var(--muted); stroke-width: 1.4; fill: none; marker-end: url(#arr); }
+  svg .lanelabel { fill: var(--muted); font-size: 11px; letter-spacing: .08em; }
+  svg .small { font-size: 11px; fill: var(--muted); }
+  .pill { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: .78em;
+          border: 1px solid var(--line); color: var(--muted); margin-left: 6px; }
+</style>
+</head>
+<body>
+
+<h1>BTP_RAG — System Design</h1>
+<p class="meta">The one-page technical map: pipeline, canonical generation path, the four
+provenance views, gates, and the eval spine. Companion:
+<a href="design_decisions.html">design_decisions.html</a> (every key decision + the
+evidence behind it) · <code>docs/BUILD_PLAN.md</code> (reviewed M1/M2 build plan).
+Updated 2026-07-22, branch <code>sanechips-rag</code>.</p>
+
+<h2>1. The pipeline</h2>
+
+<svg viewBox="0 0 940 470" role="img" aria-label="BTP_RAG pipeline diagram">
+  <defs>
+    <marker id="arr" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <polygon points="0 0, 9 3.5, 0 7" fill="#8b949e"/>
+    </marker>
+  </defs>
+
+  <!-- OFFLINE lane -->
+  <rect class="lane" x="8" y="8" width="924" height="118"/>
+  <text class="lanelabel" x="20" y="28">OFFLINE — deterministic ingest (runs once per corpus snapshot; nightly drift check in CI)</text>
+  <rect class="box" x="20"  y="44" width="150" height="56"/>
+  <text x="36" y="67">fetch 3 SAP docs</text><text class="small" x="36" y="85">corpus/ + MANIFEST</text>
+  <rect class="box" x="210" y="44" width="170" height="56"/>
+  <text x="226" y="67">chunk (structure-aware)</text><text class="small" x="226" y="85">1,216 chunks · stable ids</text>
+  <rect class="box" x="420" y="44" width="170" height="56"/>
+  <text x="436" y="67">embed_text = title ›</text><text class="small" x="436" y="85">section_path + raw text</text>
+  <rect class="box" x="630" y="44" width="140" height="56"/>
+  <text x="646" y="67">embed (OpenAI)</text><text class="small" x="646" y="85">1536-dim vectors</text>
+  <rect class="box" x="800" y="44" width="120" height="56"/>
+  <text x="816" y="67">store</text><text class="small" x="816" y="85">SQLite | Qdrant*</text>
+  <path class="arrow" d="M170 72 H206"/><path class="arrow" d="M380 72 H416"/>
+  <path class="arrow" d="M590 72 H626"/><path class="arrow" d="M770 72 H796"/>
+
+  <!-- ONLINE lane -->
+  <rect class="lane" x="8" y="140" width="924" height="196"/>
+  <text class="lanelabel" x="20" y="160">ONLINE — one engine (core.Engine), every request</text>
+  <rect class="box" x="20" y="176" width="120" height="52"/>
+  <text x="34" y="198">question</text><text class="small" x="34" y="215">/ask · /ask/stream</text>
+  <rect class="box" x="170" y="176" width="130" height="52"/>
+  <text x="184" y="198">embed query</text><text class="small" x="184" y="215">~250 ms API call</text>
+  <rect class="box" x="330" y="176" width="200" height="52"/>
+  <text x="344" y="198">hybrid retrieve</text>
+  <text class="small" x="344" y="215">dense cosine ⊕ app BM25 → RRF</text>
+  <rect class="box" x="560" y="176" width="120" height="52"/>
+  <text x="574" y="198">dedup</text><text class="small" x="574" y="215">sha256 + Jaccard</text>
+  <rect class="box hot" x="710" y="176" width="210" height="52"/>
+  <text x="724" y="198">two-layer refusal gate</text>
+  <text class="small" x="724" y="215">L1 cosine&lt;0.56 · L2 model refusal</text>
+  <path class="arrow" d="M140 202 H166"/><path class="arrow" d="M300 202 H326"/>
+  <path class="arrow" d="M530 202 H556"/><path class="arrow" d="M680 202 H706"/>
+
+  <rect class="box hot" x="330" y="262" width="280" height="56"/>
+  <text x="344" y="285">generate_stream (canonical)</text>
+  <text class="small" x="344" y="303">plain text + inline [chunk-id] citations</text>
+  <rect class="box" x="660" y="262" width="120" height="56"/>
+  <text x="674" y="285">citations</text><text class="small" x="674" y="303">⊆ retrieved set</text>
+  <rect class="box" x="810" y="262" width="110" height="56"/>
+  <text x="824" y="285">2 transports</text><text class="small" x="824" y="303">SSE | buffered</text>
+  <path class="arrow" d="M815 228 C815 250, 700 245, 612 268"/>
+  <path class="arrow" d="M610 290 H656"/><path class="arrow" d="M780 290 H806"/>
+
+  <!-- EVAL lane -->
+  <rect class="lane" x="8" y="350" width="924" height="112"/>
+  <text class="lanelabel" x="20" y="370">EVAL — same engine, never a copy (eval-what-you-serve)</text>
+  <rect class="box" x="20" y="386" width="200" height="56"/>
+  <text x="34" y="409">gold: 48 questions</text>
+  <text class="small" x="34" y="427">8 types · 17 adversarial · dev/test</text>
+  <rect class="box" x="250" y="386" width="220" height="56"/>
+  <text x="264" y="409">rules judge retrieval</text>
+  <text class="small" x="264" y="427">hit@k · evidence-recall@5 · atoms</text>
+  <rect class="box" x="500" y="386" width="190" height="56"/>
+  <text x="514" y="409">gpt-5 judges answers</text>
+  <text class="small" x="514" y="427">faithfulness · correctness · relevance</text>
+  <rect class="box" x="720" y="386" width="200" height="56"/>
+  <text x="734" y="409">fingerprint + registry</text>
+  <text class="small" x="734" y="427">append-only · per-run archives</text>
+  <path class="arrow" d="M220 414 H246"/><path class="arrow" d="M470 414 H496"/>
+  <path class="arrow" d="M690 414 H716"/>
+  <path class="arrow" d="M120 336 V382"/>
+</svg>
+
+<p class="meta">* store status: SQLite is the local dev/demo track; HANA Cloud was the
+verified prod track until the trial ended (code kept as integration proof); Qdrant
+server-side hybrid is the planned replacement (see BUILD_PLAN M2.4).</p>
+
+<h2>2. The canonical generation path <span class="pill">one kitchen, two transports</span></h2>
+
+<p>There is exactly <b>one</b> generation code path. The model always writes plain text
+with inline <code>[chunk-id]</code> citations; JSON is assembled by the endpoint, never
+by the model. Non-streaming functions are 4-line <em>buffered wrappers</em> over their
+streaming twins — so the eval harness, <code>/ask</code>, and <code>/ask/stream</code>
+run literally identical logic:</p>
+
+<pre>
+chat_stream()      providers.py   raw tokens from the LLM, one by one (+ usage last)
+   ↑ wrapped by
+generate_stream()  generate.py    refusal gates · accumulates copy · extracts citations
+   ↑ wrapped by                   from the FINISHED text, validated ⊆ retrieved set
+ask_stream()       core.py        retrieval first · TTFT stamp · trace · request log
+   ↑ wrapped by
+/ask/stream        main.py        SSE: data:{token}… then one done-event (citations,
+                                  latency, cost — structured parts need finished text)
+/ask               main.py        SAME chain, buffered: collect tokens, assemble JSON
+
+generate() = for kind, payload in generate_stream(...): if kind == "done": return payload
+ask()      = same wrapper over ask_stream()
+</pre>
+
+<div class="card"><b>Why it's built this way:</b> streaming shipped first as a separate
+prompt+path and the eval silently kept measuring the old path — a measured
+eval/serving divergence (the streaming path refused synthesis questions 5/6 while the
+eval saw nothing). Collapsing to one canonical path made "eval measures what users get"
+true <em>by construction</em>, not by discipline.</div>
+
+<h2>3. The four provenance views <span class="pill">views.py · VIEW_POLICY</span></h2>
+
+<p>One stored node is rendered differently for four audiences. The discriminator is
+always <b>provenance</b>: machine-generated enrichment may aid <em>findability</em> but
+must never be quoted as <em>evidence</em>. Policy lives in <code>config.VIEW_POLICY</code>
+and is stamped into every experiment fingerprint; six governance tests enforce it.</p>
+
+<table>
+<tr><th>view</th><th>consumer</th><th>may contain</th><th>invariant</th></tr>
+<tr><td><code>build_retrieval_text</code></td><td>search index (dense + sparse)</td>
+    <td>everything: raw text, section path, generated context, synthetic queries</td>
+    <td>maximally rich — nobody quotes it</td></tr>
+<tr><td><code>build_answering_context</code></td><td>answer LLM</td>
+    <td>raw text + real metadata; generated context ONLY if promoted, then labeled
+        <code>[GENERATED — NOT citable evidence]</code></td>
+    <td>synthetic queries: no code path exists</td></tr>
+<tr><td><code>build_citation</code></td><td>the user's source link</td>
+    <td>raw text + real doc/section/URL only</td>
+    <td>generated text can never appear (no citation laundering)</td></tr>
+<tr><td><code>build_judge_context</code></td><td>gpt-5 judge</td>
+    <td><b>defined as the answering view</b> — it literally calls it (one builder,
+        two callers)</td>
+    <td>judge scores what the model saw; drift impossible</td></tr>
+</table>
+
+<div class="card"><b>Fault attribution when generated context is promoted:</b>
+<code>answer_context_faithfulness</code> (vs what the model saw) + correctness (vs gold)
++ planned <code>source_groundedness</code> (vs raw evidence) split the blame:
+groundedness FAIL + faithfulness PASS ⇒ the <em>pipeline</em> shipped a bad enrichment;
+both FAIL ⇒ the <em>model</em> hallucinated.</div>
+
+<h2>4. The two-layer refusal gate</h2>
+
+<table>
+<tr><th></th><th>layer 1 — score gate</th><th>layer 2 — LLM gate</th></tr>
+<tr><td>mechanism</td>
+    <td>top dense cosine &lt; <b>0.56</b> → refuse before any LLM call</td>
+    <td>prompt rule: "if the answer is not in the CONTEXT, reply exactly
+        <code>Not in knowledge base.</code>"</td></tr>
+<tr><td>cost of a refusal</td><td>$0 · ~0.2 s · zero tokens</td><td>one short LLM call</td></tr>
+<tr><td>catches</td><td>off-topic questions (cosine measures topical closeness)</td>
+    <td>on-topic questions whose specific answer isn't in the retrieved text</td></tr>
+<tr><td>calibration</td><td>on the 7 negatives: max negative 0.550 &lt; 0.56 &lt; min positive 0.572</td>
+    <td>a <em>judgment</em> — needs reasoning tokens (see decision log: effort sweep)</td></tr>
+</table>
+
+<h2>5. The eval spine <span class="pill">the actual product</span></h2>
+
+<table>
+<tr><th>piece</th><th>what it does</th></tr>
+<tr><td><b>gold set</b> — 48 items, 8 files = 8 failure modes</td>
+    <td>factual(12) · table(6) · cross-doc(5) · evidence-dense(8, multi-atom) +
+        adversarial: distractor(5) · false-premise(3) · entity-confusion(2) ·
+        negative(7, must refuse exactly)</td></tr>
+<tr><td><b>dev/test split</b> (22/18 + 4/4)</td>
+    <td>dev tunes (sweeps, thresholds); test is sealed — final verdicts only.
+        Assigned at authoring time, stratified per type</td></tr>
+<tr><td><b>evidence atoms</b></td>
+    <td>gold evidence = verbatim quotes from source docs
+        (<code>{doc, quote}</code>), matched by normalized substring containment —
+        labels survive any re-chunking. Every atom machine-verified to exist</td></tr>
+<tr><td><b>evidence-recall@5 / complete@5</b></td>
+    <td>fraction / all-of an item's atom set covered in top-5 — measures <em>partial</em>
+        evidence coverage, which single-evidence hit@k structurally cannot see</td></tr>
+<tr><td><b>judge triad</b></td>
+    <td>faithfulness (vs what the model saw) · correctness (vs gold/truth) ·
+        relevance (vs the question) — independent axes; disagreements attribute faults</td></tr>
+<tr><td><b>fingerprint + registry</b></td>
+    <td>every run stamped with models + params + prompt version + view policy + efforts +
+        gold/corpus hashes; appended to <code>eval/registry.jsonl</code>; per-item results
+        archived immutably under <code>eval/out/runs/</code></td></tr>
+<tr><td><b>committed measurements</b></td>
+    <td><code>eval/measurements/</code>: repeat-probe + sweep scripts with raw per-run
+        artifacts — every published latency/refusal claim is a distribution, never a
+        single run</td></tr>
+</table>
+
+<h3>Current baseline (2026-07-20, the line M2 must beat)</h3>
+<table>
+<tr><th>metric</th><th>dev (26)</th><th>test (22)</th></tr>
+<tr><td>evidence-recall@5</td><td>0.833</td><td>0.781</td></tr>
+<tr><td>complete@5</td><td>15/19</td><td>11/16</td></tr>
+<tr><td>hit@5</td><td>0.818</td><td>0.737</td></tr>
+<tr><td>correctness / faithfulness</td><td>0.99 / 0.993</td><td>0.908 / 0.969</td></tr>
+<tr><td>false refusals · negatives · citations</td><td>1 · 4/4 · 21/21</td><td>0 · 3/3 · 19/19</td></tr>
+<tr><td>TTFT median (streaming, effort=low)</td><td>2.4 s</td><td>2.4 s</td></tr>
+</table>
+<p class="meta">Known headroom the new ruler exposed: 9/35 atom-carrying items are missing
+≥1 evidence piece in top-5 (that is the M2 target); false-premise remains the weakest
+category.</p>
+
+<h2>6. Module map</h2>
+<table>
+<tr><th>path</th><th>role</th></tr>
+<tr><td><code>config.py</code></td><td>single source of truth: models, knobs, VIEW_POLICY, fingerprint()</td></tr>
+<tr><td><code>providers.py</code></td><td>provider adapter (embed/chat/chat_stream) — OpenAI now; vLLM/GenAI-Hub = env change</td></tr>
+<tr><td><code>prompts.py</code></td><td>versioned prompts (v3 = one canonical answer protocol)</td></tr>
+<tr><td><code>views.py</code></td><td>the four provenance renderers</td></tr>
+<tr><td><code>core.py</code></td><td>Engine: ask_stream (canonical) + ask (wrapper); request log</td></tr>
+<tr><td><code>retrieve/</code></td><td>store.py (VectorStore swap unit: SQLite/HANA) · hybrid.py (BM25+RRF+dedup) · generate.py (gates + citations)</td></tr>
+<tr><td><code>app/</code></td><td>FastAPI (/ask, /ask/stream SSE, /judge, /health) + Streamlit UI with live judge</td></tr>
+<tr><td><code>eval/</code></td><td>gold/ (8 files) · run_eval (judge + registry v2) · score_retrieval (rules + atoms) · baseline (no-RAG ablation) · measurements/ · registry.jsonl</td></tr>
+<tr><td><code>ingest/</code>, <code>corpus/</code></td><td>deterministic chunking + manifest (raw docs © SAP, gitignored)</td></tr>
+</table>
+
+</body>
+</html>

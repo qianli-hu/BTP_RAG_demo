@@ -10,9 +10,12 @@ Launchpad) with **SAP HANA Cloud Vector** as the production store: grounded answ
 *Ingest is offline and deterministic; serving and eval share one engine (`core.ask`); the
 store is two-track (SQLite dev/demo · SAP HANA Cloud prod) behind one interface.*
 
-**Companion docs:** [`docs/SUPPORT.md`](docs/SUPPORT.md) (ops reference / runbook) ·
-[`docs/FUTURE.md`](docs/FUTURE.md) (v1.5 / v2 roadmap) · [`docs/archive/`](docs/archive/)
-(decision history).
+**Design docs:** [`docs/design_system.html`](docs/design_system.html) (the system map:
+pipeline, canonical path, four views, eval spine) ·
+[`docs/design_decisions.html`](docs/design_decisions.html) (every key decision + the
+measurement behind it) · [`docs/BUILD_PLAN.md`](docs/BUILD_PLAN.md) (externally-reviewed
+M1/M2 build plan) · [`docs/SUPPORT.md`](docs/SUPPORT.md) (ops runbook) ·
+[`docs/FUTURE.md`](docs/FUTURE.md) (roadmap) · [`docs/archive/`](docs/archive/) (history).
 
 ## 1. What this is (no tech required)
 
@@ -45,110 +48,80 @@ The last two rows are the enterprise argument: without retrieval the model **ans
 out-of-scope questions from memory** — plausible, uncited, unauditable. RAG turns
 "trust me" into "here's the source."
 
-## 3. Measured results (full eval, 40-item gold set, 17 adversarial)
+## 3. Measured results (M1 baseline · 48-item gold set, 17 adversarial, dev/test split)
 
-| metric | value | how scored |
-|---|---|---|
-| faithfulness (grounding / anti-hallucination) | **0.983** | gpt-5 judge vs retrieved context |
-| correctness | **0.962** | gpt-5 judge vs gold answer |
-| out-of-corpus refusal | **7/7**, 0 false refusals | exact-string rule |
-| citation validity | **32/33** | rule: cited chunk-id exists **and** was retrieved |
-| retrieval hit-rate@5 | **76%** (identical on SQLite & HANA) | rule: gold section in top-5 |
-| retrieval engine latency | ~19 ms (+~0.7 s query embed) | measured per step |
-| answer latency / cost | median ~5.9 s · ~$0.0012/answer | request log |
-| eval wall-clock | ~2 min (8-way concurrent; was ~8 min serial → **5×**) | measured A/B |
+The gold set is split **dev 26 / test 22** at authoring time: dev is for tuning (sweeps,
+thresholds), test is sealed for final verdicts — so the honest column is **test**.
 
-Every run is fingerprint-stamped (models + params + prompt + gold + corpus hashes) and
-recorded in [`eval/registry.jsonl`](eval/registry.jsonl) with immutable per-item archives.
+| metric | dev | **test** | how scored |
+|---|---|---|---|
+| evidence-recall@5 *(new)* | 0.833 | **0.781** | rule: fraction of each answer's required **evidence atoms** (verbatim source quotes) covered in top-5 |
+| complete@5 *(new)* | 15/19 | **11/16** | rule: ALL atoms covered |
+| retrieval hit-rate@5 | 0.818 | **0.737** | rule: gold section in top-5 |
+| correctness | 0.99 | **0.908** | gpt-5 judge vs gold answer |
+| faithfulness (anti-hallucination) | 0.993 | **0.969** | gpt-5 judge vs the exact context the model saw |
+| out-of-corpus refusal | 4/4 | **3/3** | exact-string rule (0 false refusals on test) |
+| citation validity | 21/21 | **19/19** | rule: cited chunk-id exists **and** was retrieved |
+| TTFT (streaming, `reasoning_effort=low`) | median 2.4 s | 2.4 s | request log; medians of repeated runs only |
 
-**The latency ↔ accuracy tradeoff, measured** — accuracy levers live in the milliseconds
-(retrieval side); latency lives in LLM/API calls. This is why v1.5 queues a **local
-cross-encoder reranker (≈ +30 ms)** over LLM query rewriting (≈ +1–3 s), and why the
-refusal gate short-circuits *before* the LLM:
+Every run is fingerprint-stamped (models + params + prompt version + view policy + gold +
+corpus hashes) and recorded in [`eval/registry.jsonl`](eval/registry.jsonl) with immutable
+per-item archives; raw latency/refusal probes are committed under
+[`eval/measurements/`](eval/measurements/) — **published claims are distributions, never
+single runs** (a single-run TTFT headline was falsified by 3 repeats and corrected; see
+[`docs/design_decisions.html`](docs/design_decisions.html) D6/D8).
 
-<img src="docs/latency_accuracy.svg" alt="Measured latency vs accuracy: hit-rate by retrieval depth, and per-stage latency on a log scale" width="900">
+Two findings the new metrics exposed (both invisible to plain hit@k):
+- **9/35 atom-carrying questions are missing ≥1 evidence piece in top-5** — answers built
+  on partial evidence (one scored correctness 0.65 for exactly this reason). This is the
+  measured target for the M2 retrieval work.
+- **Refusal quality is reasoning-bound**: at `reasoning_effort=minimal` the system falsely
+  refused 33% of answerable dev questions (false-premise correction failed 6/6); `low`
+  brought false refusals to 0/48 at half of medium's latency — chosen as the operating
+  point by sweep, not by taste.
 
-Detail that matters: the judge caught one **correct-but-ungrounded** answer (q21: right facts,
-half not from the retrieved context — faithfulness 0.5, correctness 1.0). That's the metric
-doing its job: correctness alone would have rubber-stamped a hallucination pattern.
-Known weak spot: **cross-doc questions** (faith 0.9 / corr 0.8) — diagnosed as a *ranking* gap
-(gold chunk at rank 6–10), fix queued (local cross-encoder rerank; see
-[`docs/FUTURE.md`](docs/FUTURE.md)).
+## 4. Current work — the M-series (reviewed build plan)
 
-## 4. `sanechips-rag` branch — JD-focused knowledge-construction upgrades
+Full detail in [`docs/BUILD_PLAN.md`](docs/BUILD_PLAN.md) (externally reviewed; 8 findings
+incorporated) and the two design docs linked at the top.
 
-This branch is for the 中兴微 / Sanechips RAG interview track. The main system already proves
-grounded RAG, HANA vector search, hybrid retrieval, refusal gates, and eval. This branch frames
-the next layer around **knowledge extraction, corpus rebuild quality, and retrieval iteration**.
+**M1 — build the honest ruler · ✅ complete (2026-07-20):**
+- **One canonical generation contract** (prompts v3): the model always writes plain text
+  with inline `[chunk-id]` citations; endpoints assemble JSON; `generate()`/`ask()` are
+  buffered wrappers over the streaming twins — eval measures the served path *by
+  construction*. Split `ANSWER_`/`JUDGE_REASONING_EFFORT` knobs; operating point `low`
+  chosen by a 3-arm × 48-run dev sweep.
+- **Four provenance views** (`views.py` + fingerprinted `VIEW_POLICY`): retrieval /
+  answering / citation / judge renderings of one node; the judge view *is* the answering
+  view (one builder, two callers); 6 governance tests make violations impossible.
+- **Evidence atoms + evidence-dense gold**: labels = verbatim source quotes (survive any
+  re-chunking); 8 new multi-evidence questions; `evidence-recall@5` + `complete@5`;
+  dev/test split; registry schema v2 (full metric set per split); baseline recorded.
 
-**Scope note:** the live trace-harness / Codex skill idea is deliberately deferred. The cheaper
-branch focus is corpus-time intelligence: make better retrievable units, richer metadata, and
-stronger eval reports before changing the serving loop.
+**M2 — retrieval improvements + real infra, each A/B'd against the M1 baseline (next):**
+1. **Qdrant server-side hybrid** (dense HNSW + sparse BM25 + RRF fused in-DB → the app
+   goes stateless) + **docker compose** (app + qdrant) — parity-gated on the full eval
+2. **vLLM first contact**: rent a GPU, serve an open model behind vLLM's
+   OpenAI-compatible endpoint — the adapter swap is two env vars; same eval → an honest
+   API-vs-self-host economics row
+3. Quality A/Bs on the new ruler: contextual sparse → local cross-encoder rerank +
+   parent/adjacency expansion → doc2context (provenance-staged, retrieval-only first)
 
-| upgrade | design intent | where it fits |
-|---|---|---|
-| **Doc2Query / query-aligned retrieval** | Generate likely user questions per chunk, so matching can happen as query→question as well as query→source prose. | post-chunk corpus rebuild |
-| **Fielded sparse search** | BM25 over weighted fields: `text`, `section_path`, `entities`, `topic_label`, generated questions. Exact SAP terms still matter. | sparse retrieval |
-| **Dual dense representations** | Keep raw chunk embeddings for provenance, add separate generated-question embeddings for query alignment; score both and weight/fuse. | dense retrieval |
-| **Multi-route RRF** | Fuse `dense_chunk`, `dense_question`, `bm25_text`, `bm25_question`, and optional metadata-filtered routes by Reciprocal Rank Fusion. | retrieval core |
-| **Final rerank** | Cross-encoder rerank top-N after fusion; do this only after recall is high enough and latency budget is known. | precision@top |
-| **Pre-index dedup** | After chunking, group exact/near duplicates and keep the newest chunk as canonical; preserve older sources as aliases/provenance. | corpus governance |
-| **Entity/event metadata** | Extract SAP products, SQL functions, units, metrics, actions/events (`create deployment`, `delete prompt`, etc.) for filters and future graph retrieval. | metadata sidecar |
-| **Topic clustering** | Assign `topic_id`, `topic_label`, and confidence to chunks for routing, coverage analysis, and per-topic eval. | metadata sidecar |
-| **Quality reports** | Add parse/chunk/retrieval reports: duplicate groups, topic coverage, entity coverage, oversized tables, missing parents, Recall@K/MRR/nDCG. | eval + governance |
-| **RAGAS second check** | Convert existing eval outputs into RAGAS samples as a standardized reporting layer, not a replacement for our citation/refusal gates. | eval reporting |
+*(Evaluated and rejected with reasons — see decision log: RAPTOR (global recompute on
+every ingest, stochastic clustering vs reproducibility, citation indirection).)*
 
-The intended Doc2Query path is:
+## 5. Key design decisions (each: what / why)
 
-```text
-chunk text
-  -> generate 3-5 likely questions per chunk
-  -> sparse routes: weighted BM25 over text fields + generated-question fields
-  -> dense routes: embed chunk text and generated questions separately
-  -> RRF fuse all routes
-  -> deterministic dedup
-  -> optional cross-encoder rerank
-  -> answer with citations to original chunk ids only
-```
-
-Important invariant: generated questions, entities, and topics are **metadata / derived
-representations**, not replacements for source truth. Final answers still cite original chunk IDs.
-
-## 5. JD gap closure — low-hanging improvements to show breadth
-
-These are intentionally small, interview-visible increments. Each can be implemented as a
-script/report without destabilizing the working RAG demo.
-
-| JD area | low-hanging item | concrete artifact |
-|---|---|---|
-| 多格式文档解析 | Add a note linking this repo's PDF/HTML/Docling work with the caries repo's Word-doc + chart-image extraction. | `docs/JD_ZXMICRO.md` |
-| 多格式文档解析 | Add a DOCX parser stub using `python-docx` or Docling to prove the ingestion interface is format-extensible. | `ingest/parse_docx.py` |
-| 表格理解 | Split oversized Markdown tables by row groups with repeated headers, while preserving table provenance. | `ingest/split_large_tables.py` |
-| 图表理解 | Add a design stub for chart/image extraction using the caries pattern: crop/split image regions, VLM-to-JSON, validate schema. | `docs/JD_ZXMICRO.md` |
-| 切分策略 | Add an ablation report comparing current structure-aware chunks vs smaller/larger chunk sizes on hit-rate@k. | `eval/chunk_ablation.py` |
-| 实体抽取 | Extract product/function/unit/action entities from chunks with regex + optional LLM pass. | `ingest/entities.jsonl` |
-| 事件抽取 | Extract operational events from docs: create/delete/deploy/list/update/serve/run. | `ingest/events.jsonl` |
-| 主题聚类 | Cluster chunk embeddings; store `topic_id`, `topic_label`, representative chunks. | `ingest/topics.jsonl` |
-| 去重 | Add corpus-time exact/near-dup grouping; choose newest `doc_version` as canonical and keep aliases. | `ingest/dedup_report.md` |
-| 检索优化 | Add Doc2Query sidecar and multi-route RRF over raw chunks + generated questions. | `ingest/doc2query.jsonl`, retrieval route |
-| 评测体系 | Add Recall@K, MRR, and nDCG next to current hit-rate/citation/refusal gates. | `eval/ranking_metrics.py` |
-| 评测体系 | Add RAGAS as optional second-check reporting over existing result rows. | `eval/ragas_eval.py` |
-| 知识治理 | Add corpus-quality report: duplicate rate, missing metadata, topic coverage, entity coverage, table coverage. | `ingest/out/quality_report.md` |
-| 生产落地 | Add a load/latency smoke script that replays 20 queries and reports p50/p95. | `eval/load_smoke.py` |
-| GraphRAG 加分项 | Add entity co-occurrence graph export for Neo4j/NebulaGraph-style demo, without changing retrieval yet. | `ingest/kg_edges.jsonl` |
-
-Interview framing:
-
-> "The current system already has reliable grounded RAG. On this branch I would extend the
-> knowledge-construction layer: Doc2Query for query alignment, corpus-time dedup, entity/event
-> extraction, topic clustering, richer ranking metrics, and RAGAS as a second check. My caries
-> project covers the multimodal Word/chart/image side, while this repo covers production RAG,
-> retrieval optimization, HANA vector storage, and eval governance."
-
-## 6. Key design decisions (each: what / why)
+Full decision log with evidence: [`docs/design_decisions.html`](docs/design_decisions.html).
 
 | decision | why |
 |---|---|
+| **One canonical generation contract** — model writes plain text + inline `[chunk-id]`; JSON assembled by endpoints; non-streaming = buffered wrapper over streaming | eval-what-you-serve *by construction*: eval, `/ask`, `/ask/stream` are one code path (v2 had two diverging protocols — caught by review, measured, fixed) |
+| **`reasoning_effort=low`, chosen by sweep** | refusal layer-2 and false-premise correction are *reasoning tasks*: `minimal` falsely refused 33% (false-premise 6/6); `low` = 0/48 false refusals at half of `medium`'s TTFT |
+| **Evidence atoms** — gold labels are verbatim source quotes, not chunk ids | labels survive re-chunking (chunking A/Bs can't invalidate their own ruler); enables `evidence-recall@5`, which sees *partial* evidence coverage that hit@k structurally cannot |
+| **Dev/test gold split**, assigned at authoring | tuning on the regression set turns it into a training set; sweeps/thresholds use dev, verdicts use sealed test |
+| **Four provenance views** over one node (`views.py`, fingerprinted policy) | M2's generated enrichment may boost *findability* but must never be quoted as *evidence* or leak into the judge; judge view ≡ answering view (one builder, two callers), enforced by tests |
+| **Distributions, never single runs** | a single-run TTFT headline was falsified by 3 repeats; all published latency/refusal claims are medians of ≥5 runs with committed raw artifacts (`eval/measurements/`) |
 | **Two-track store** (`SqliteStore` dev/demo, `HanaStore` prod) behind one `VectorStore` interface | dev/prod parity + demo resilience; only `dense_search` is backend-specific — embedding, BM25, RRF, dedup are one fixed core |
 | **Hybrid retrieval**: dense (cosine) ⊕ sparse (BM25) fused by **RRF** | dense catches paraphrase, sparse catches exact SQL identifiers (`REAL_VECTOR`); RRF fuses by rank so score scales don't matter |
 | **BM25 in the app layer** | HANA **free tier** doesn't support in-DB full-text (verified empirically); index rebuilds in 38 ms at startup — always statistically exact. Paid HANA moves it in-DB unchanged |
@@ -161,10 +134,13 @@ Interview framing:
 | **Config-driven everything** (`config.py`, `providers.py`, `prompts.py`) | no hardcoded models/prompts/params; provider adapter makes OpenAI→SAP Gen AI Hub a config change |
 | **CI as quality gate** | every PR: lint + unit tests; retrieval-touching PRs: deterministic eval gates (hit-rate ≥ 70%, refusal separation); **nightly rebuilds from live SAP docs = drift detection** with a triage matrix (corpus-hash diff × gate verdict) |
 
-## 7. Ownership & governance — who computes what, who stores what
+## 6. Ownership & governance — who computes what, who stores what
 
-Verified empirically on the live instance (registry: `gates-hana` — **identical gate results
-on both stores**, dev/prod parity measured). Three reasons a piece runs where it runs:
+Verified empirically on the live instance while the HANA trial was active (registry:
+`gates-hana` — **identical gate results on both stores**, dev/prod parity measured).
+*Status note: the HANA trial has since ended — the HANA code stays as verified integration
+proof, SQLite remains the dev/demo track, and Qdrant (server-side hybrid) is the planned
+replacement store (BUILD_PLAN M2.4).* Three reasons a piece runs where it runs:
 **(C)** platform constraint (trial/free tier) · **(D)** deliberate design · **(S)** scale-gated.
 
 | part | computed by | stored in | why here | with FULL HANA access (paid + entitlements) |
@@ -187,19 +163,20 @@ never crosses a third-party boundary; the **(D)** rows (chunking, RRF, refusal, 
 the app because they belong there. The provider adapter and `VectorStore` interface mean those
 moves are config changes, not rewrites.
 
-## 8. Module map
+## 7. Module map
 
 | module | path | inspect with |
 |---|---|---|
-| shared kernel | `config.py` `providers.py` `prompts.py` `core.py` | `python3 -c "import config,json;print(json.dumps(config.fingerprint('v1'),indent=2))"` |
+| shared kernel | `config.py` `providers.py` `prompts.py` `views.py` `core.py` | `python3 -c "import config,json;print(json.dumps(config.fingerprint('v3'),indent=2))"` |
 | corpus | `corpus/` (+ committed `MANIFEST.json`) | `cat corpus/MANIFEST.json` |
 | chunking | `ingest/` | `cat ingest/out/chunks_report.md` |
 | retrieval | `retrieve/` (store, hybrid, generate) | `PYTHONPATH=. python3 retrieve/hybrid.py "your query"` |
-| serving | `app/` (FastAPI + Streamlit UI w/ live gpt-5 judge) | `uvicorn app.main:app` → `localhost:8000/docs` |
-| eval & gates | `eval/` (gold/, scorers, judge, gates, registry) | [`eval/README.md`](eval/README.md) — incl. drill-down recipe |
-| CI | `.github/workflows/` + `tests/` | `pytest && ruff check . && PYTHONPATH=. python3 eval/gates.py` |
+| serving | `app/` (FastAPI: `/ask`, `/ask/stream` SSE, `/judge` + Streamlit UI w/ live gpt-5 judge) | `uvicorn app.main:app` → `localhost:8000/docs` |
+| eval & gates | `eval/` (gold/ 8 files · scorers incl. evidence atoms · judge · registry v2) | [`eval/README.md`](eval/README.md) — incl. drill-down recipe |
+| measurements | `eval/measurements/` (repeat probes, sweeps, raw artifacts) | `cat eval/measurements/README.md` |
+| CI | `.github/workflows/` + `tests/` (20) | `pytest && ruff check . && PYTHONPATH=. python3 eval/gates.py` |
 
-## 9. Run it
+## 8. Run it
 
 ```bash
 pip install -e ".[dev]"                        # or: uv sync

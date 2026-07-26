@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BTP_RAG — Design Decisions &amp; Evidence</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --line: #d1d9e0;
+    --card: #f6f8fa; --accent: #0969da; --ok: #1a7f37; --warn: #9a6700; --bad: #cf222e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --line: #3d444d;
+      --card: #161b22; --accent: #4493f8; --ok: #3fb950; --warn: #d29922; --bad: #f85149;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0 auto; max-width: 940px; padding: 32px 24px 80px; background: var(--bg);
+         color: var(--fg); font: 16px/1.6 -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+  h1 { font-size: 1.9em; border-bottom: 1px solid var(--line); padding-bottom: .3em; }
+  h2 { font-size: 1.35em; margin-top: 2.2em; border-bottom: 1px solid var(--line); padding-bottom: .25em; }
+  .meta { color: var(--muted); font-size: .9em; }
+  .d { border: 1px solid var(--line); border-radius: 10px; margin: 1.1em 0; overflow: hidden; }
+  .d > .head { background: var(--card); padding: 10px 16px; font-weight: 650; display: flex;
+               justify-content: space-between; align-items: baseline; gap: 12px; }
+  .d > .body { padding: 12px 16px; }
+  .d p { margin: .45em 0; }
+  .lbl { font-weight: 650; color: var(--muted); font-size: .82em; text-transform: uppercase;
+         letter-spacing: .05em; margin-right: .4em; }
+  .tag { font-size: .75em; padding: 2px 10px; border-radius: 999px; white-space: nowrap;
+         border: 1px solid var(--line); color: var(--muted); font-weight: 500; }
+  .tag.ship { color: var(--ok); border-color: var(--ok); }
+  .tag.plan { color: var(--warn); border-color: var(--warn); }
+  .tag.dead { color: var(--bad); border-color: var(--bad); }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .88em;
+         background: var(--card); border-radius: 6px; padding: .12em .38em; }
+  table { border-collapse: collapse; width: 100%; margin: .8em 0; font-size: .9em; }
+  th, td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; }
+  th { background: var(--card); }
+</style>
+</head>
+<body>
+
+<h1>BTP_RAG — Design Decisions &amp; Evidence</h1>
+<p class="meta">Every load-bearing decision: what we chose, why, and the measurement
+behind it. Sibling doc: <a href="design_system.html">design_system.html</a> (the system
+map). The deeper reviewed plan is <code>docs/BUILD_PLAN.md</code>; run history with
+fingerprints is <code>eval/registry.jsonl</code>. Updated 2026-07-22.</p>
+
+<h2>Retrieval &amp; storage</h2>
+
+<div class="d"><div class="head">D1 · Hybrid retrieval: dense ⊕ BM25, fused by RRF <span class="tag ship">shipped</span></div>
+<div class="body">
+<p><span class="lbl">why</span> Dense embeddings catch paraphrase ("how do I make search
+faster" → HNSW section); sparse BM25 catches exact rare identifiers
+(<code>REAL_VECTOR</code>, <code>COSINE_SIMILARITY</code>) that embeddings fumble.
+Reciprocal Rank Fusion combines by <em>rank</em>, so incompatible score scales never
+need calibrating.</p>
+<p><span class="lbl">evidence</span> hit@5 0.78 with both routes; the custom tokenizer
+keeps SQL identifiers intact (<code>tokenize()</code> test-pinned).</p>
+</div></div>
+
+<div class="d"><div class="head">D2 · BM25 in the app layer (v1) <span class="tag ship">shipped · superseded by D12 plan</span></div>
+<div class="body">
+<p><span class="lbl">why</span> HANA free tier blocks in-DB full-text indexing
+(verified empirically — <code>CREATE FULLTEXT INDEX</code> rejected). App-side
+<code>rank_bm25</code> rebuilds the index in ~38 ms at startup.</p>
+<p><span class="lbl">consequence</span> the app is <em>stateful</em> (index in RAM) —
+acceptable at 1,216 chunks, wrong at scale; fixed by D12 (server-side hybrid), which
+makes the app stateless and horizontally clonable.</p>
+</div></div>
+
+<div class="d"><div class="head">D3 · Two-layer refusal gate <span class="tag ship">shipped</span></div>
+<div class="body">
+<p><span class="lbl">why</span> Retrieval always returns the 5 <em>least-bad</em> chunks
+— someone must decide "good enough?". Layer 1: top cosine &lt; 0.56 → refuse with zero
+LLM cost (~0.2 s). Layer 2: the prompt's escape hatch — the model refuses when the
+context lacks the answer. Layer 1 catches off-topic; layer 2 catches on-topic-but-unanswerable.</p>
+<p><span class="lbl">evidence</span> threshold calibrated on the 7 negatives (max negative
+0.550 &lt; 0.56 &lt; min positive 0.572); negatives 7/7 refused at baseline, 0 false
+refusals on test. <b>Caveat discovered by measurement:</b> layer 2 is a <em>reasoning
+task</em> — see D8.</p>
+</div></div>
+
+<div class="d"><div class="head">D4 · Citations are chunk-ids, validated by rule <span class="tag ship">shipped</span></div>
+<div class="body">
+<p><span class="lbl">why</span> URL-level citation checks pass wrong-section citations
+(many PDF chunks share one URL). A cited chunk-id must exist in the corpus <b>and</b> be
+in that query's retrieved set — hallucinated citations are structurally detectable.</p>
+<p><span class="lbl">evidence</span> 40/40 citation validity at the M1 baseline; the
+regex extraction from streamed plain text preserved the same guarantee after D7.</p>
+</div></div>
+
+<h2>Serving</h2>
+
+<div class="d"><div class="head">D5 · SSE streaming; structured data rides the final event <span class="tag ship">shipped</span></div>
+<div class="body">
+<p><span class="lbl">why</span> Perceived latency: the user watches the answer type
+instead of staring at a spinner. JSON can't stream (unreadable until the last brace), so
+the model writes plain text with inline citations; citations/latency/cost need the
+finished text and ride one final <code>done</code> event. Errors travel in-band (the 200
+is already sent).</p>
+<p><span class="lbl">evidence</span> TTFT median 2.1 s vs 4.8 s total on synthesis
+questions (5-run sequential, committed artifact) — &gt;50% of perceived wait removed.</p>
+</div></div>
+
+<div class="d"><div class="head">D6 · Single-run claims are banned <span class="tag ship">policy, enforced by artifacts</span></div>
+<div class="body">
+<p><span class="lbl">the lesson</span> Streaming shipped with a single-run headline
+("TTFT 1.36 s, 72% of wait eliminated"). Three repeat runs falsified it: the passing run
+was a 1-in-6 outlier; the same question was refused 5/6 times at the then-default
+config. Latency variance on a shared API is huge (TTFT 1.1→12.7 s on identical config).</p>
+<p><span class="lbl">policy</span> published latency/refusal claims = medians of ≥5
+sequential runs; raw per-run artifacts committed under <code>eval/measurements/</code>;
+tuning-time generation runs 3× on refusal-prone types.</p>
+</div></div>
+
+<div class="d"><div class="head">D7 · One canonical generation contract <span class="tag ship">shipped (prompts v3)</span></div>
+<div class="body">
+<p><span class="lbl">the failure it fixes</span> v2 had two public answer protocols:
+<code>/ask</code> made the model emit a JSON envelope while <code>/ask/stream</code> used
+plain text — different prompts, different reasoning effort — and the eval measured only
+the path the demo no longer used. Eval-what-you-serve was silently violated.</p>
+<p><span class="lbl">the fix</span> The model always writes plain text + inline
+citations; endpoints assemble JSON; <code>generate()</code>/<code>ask()</code> are 4-line
+buffered wrappers over the streaming twins. One code path, two transports — the eval
+covers both by construction. Also split <code>ANSWER_</code>/<code>JUDGE_REASONING_EFFORT</code>
+so tuning the answerer can never silently change the judge.</p>
+</div></div>
+
+<div class="d"><div class="head">D8 · Reasoning effort: <code>low</code> is the operating point <span class="tag ship">shipped (measured)</span></div>
+<div class="body">
+<p><span class="lbl">the finding</span> Layer-2 refusal ("is the answer in this
+context?") and false-premise correction are <em>reasoning tasks</em>. Cut thinking to
+<code>minimal</code> and the model takes the refusal escape hatch on anything requiring
+evidence assembly.</p>
+<p><span class="lbl">evidence (dev sweep, 48 runs/arm, registry rows)</span></p>
+<table>
+<tr><th>effort</th><th>false refusals</th><th>correctness</th><th>TTFT</th></tr>
+<tr><td>minimal</td><td>33% — false-premise 6/6, distractor 3/9</td><td>1.0 (survivorship!)</td><td>~0.9 s</td></tr>
+<tr><td><b>low ✓</b></td><td><b>0/48</b></td><td>0.989</td><td>~2.1 s</td></tr>
+<tr><td>medium</td><td>0/48</td><td>0.933</td><td>~7.4 s</td></tr>
+</table>
+<p><span class="lbl">note</span> minimal's correctness 1.0 is survivorship — it only
+answered easy questions. Correctness must always be read next to refusal counts.</p>
+</div></div>
+
+<h2>Eval discipline</h2>
+
+<div class="d"><div class="head">D9 · Evidence atoms: chunking-independent gold labels <span class="tag ship">shipped</span></div>
+<div class="body">
+<p><span class="lbl">why</span> Gold labels keyed to chunk ids/sections break the moment
+chunking changes — the experiment would invalidate its own labels. An atom is
+<code>{doc, verbatim quote}</code>; a chunk covers it iff the normalized quote appears in
+its text. Labels survive any re-chunking; every atom is machine-verified to exist in the
+corpus at validation time.</p>
+<p><span class="lbl">payoff</span> <b>evidence-recall@5</b> (graded) and
+<b>complete@5</b> (strict) — metrics that see <em>partial</em> evidence coverage.
+Single-evidence hit@k scores a retrieval "perfect" the moment one gold chunk appears,
+even when the answer needs four. Baseline immediately exposed the M2 target: 9/35
+atom-carrying items missing ≥1 evidence piece in top-5 (one answered from partial
+evidence: correctness 0.65).</p>
+</div></div>
+
+<div class="d"><div class="head">D10 · Dev/test split; judge = answering view <span class="tag ship">shipped</span></div>
+<div class="body">
+<p><span class="lbl">dev/test</span> Tuning on the regression set turns it into a
+training set (external review finding). 22 dev / 18 test + 4/4 on the new questions,
+stratified per type, assigned at authoring time. Sweeps and thresholds tune on dev;
+published verdicts come from test only. Baseline honestly shows the gap: dev correctness
+0.99 vs test 0.908.</p>
+<p><span class="lbl">judge invariant</span> The judge's context is built by the SAME
+function as the answering view (<code>build_judge_context = build_answering_context</code>)
+— the judge scores exactly what the model saw. Faithfulness vs raw-text-only was
+considered and <b>rejected</b>: it would mislabel faithful use of provided context as
+hallucination; bad enrichment is caught by correctness-vs-gold (+ planned
+source_groundedness) instead.</p>
+</div></div>
+
+<div class="d"><div class="head">D11 · Four provenance views over one node <span class="tag ship">shipped (guardrails ahead of cargo)</span></div>
+<div class="body">
+<p><span class="lbl">why</span> M2 adds machine-generated enrichment (doc2context,
+maybe doc2query). Generated text boosting <em>findability</em> must never be quoted as
+<em>evidence</em> (citation laundering) or leak into the judge. Retrieval view sees
+everything; answering view sees authoritative text (+labeled generated only if
+explicitly promoted — a fingerprinted A/B, off by default); citation view is
+authoritative-only; judge view <em>is</em> the answering view.</p>
+<p><span class="lbl">enforcement</span> <code>VIEW_POLICY</code> in config + fingerprint;
+6 governance tests make violations a test failure, not a code-review hope.</p>
+</div></div>
+
+<h2>Rejected &amp; planned</h2>
+
+<div class="d"><div class="head">R1 · RAPTOR — evaluated and rejected <span class="tag dead">rejected 2026-07-18</span></div>
+<div class="body">
+<p><span class="lbl">what it was</span> Cluster chunks (UMAP+GMM), LLM-summarize each
+cluster, recurse into a tree, index summary nodes alongside leaves — pre-assembling
+scattered evidence at index time.</p>
+<p><span class="lbl">why rejected</span> (a) global re-cluster + re-summarize on every
+corpus update — no clean incremental insert; (b) stochastic clustering fights
+fingerprint reproducibility; (c) summary nodes break citation semantics (generated text
+cited as source). Replaced by an all-incremental stack: contextual sparse → reranker +
+parent/adjacency expansion → doc2context — every technique per-chunk or query-time.
+Revisit only for large cross-document thematic corpora.</p>
+</div></div>
+
+<div class="d"><div class="head">D12 · Qdrant server-side hybrid; app goes stateless <span class="tag plan">planned — next build (M2.4)</span></div>
+<div class="body">
+<p><span class="lbl">why</span> HANA trial ended; and D2's in-app BM25 makes the app
+stateful (blocks horizontal scaling, complicates update consistency). Qdrant runs dense
+(HNSW+cosine) + sparse (BM25, IDF modifier) + RRF fusion server-side in one Query API
+call; the app drops its in-RAM index entirely.</p>
+<p><span class="lbl">key implementation decisions (already made)</span> pinned image;
+UUID5 point ids (payload keeps real chunk id); sparse built from <b>raw text</b> first
+(parity with today), enriched text is a separate A/B (M2.1); refusal gate reads a
+batched dense-only query (fused RRF scores are not cosines; Qdrant doesn't expose
+prefetch scores); Qdrant's built-in BM25 tokenizer first — custom identifier-preserving
+tokenizer only if the identifier-heavy parity subset regresses.</p>
+<p><span class="lbl">gate</span> full eval must match/beat the M1 baseline registry rows
+before Qdrant becomes default. SQLite stays as the zero-dependency baseline arm
+(parameterize, don't archive).</p>
+</div></div>
+
+<div class="d"><div class="head">D13 · Ship-shape path: docker compose → vLLM <span class="tag plan">planned (M2.4 → 1.6)</span></div>
+<div class="body">
+<p><span class="lbl">docker</span> two services (<code>app</code> built from our
+Dockerfile; <code>qdrant</code> official pinned image) + a volume for the vectors —
+<code>docker compose up</code> is the whole demo.</p>
+<p><span class="lbl">vLLM</span> rent a GPU, serve an open model behind vLLM's
+OpenAI-compatible endpoint, and the swap is two env vars
+(<code>OPENAI_BASE_URL</code>, <code>ANSWER_MODEL</code>) through the provider adapter —
+then run the same eval and put API-vs-self-host on one economics chart. The API's true
+throughput ceiling is the provider's TPM quota (~1 req/s for token-heavy RAG); owning
+the ceiling is the business case for self-hosting.</p>
+</div></div>
+
+<h2>The meta-decision</h2>
+<div class="d"><div class="head">D0 · Everything is a fingerprinted toggle, judged by the harness</div>
+<div class="body">
+<p>Every capability that changes results (store, prompts version, efforts, view policy,
+rerank, future RAPTOR-like ideas) is a config toggle recorded in the experiment
+fingerprint, so: old behavior is always one flag away; every A/B is attributable to an
+exact configuration; and no improvement is "believed" — it must beat the baseline
+registry row on the full metric set (quality + refusals + citations + latency + cost),
+paired per-question, dev for tuning, test for the verdict.</p>
+</div></div>
+
+</body>
+</html>
