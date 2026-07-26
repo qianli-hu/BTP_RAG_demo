@@ -10,12 +10,14 @@ Launchpad) with **SAP HANA Cloud Vector** as the production store: grounded answ
 *Ingest is offline and deterministic; serving and eval share one engine (`core.ask`); the
 store is two-track (SQLite dev/demo · SAP HANA Cloud prod) behind one interface.*
 
-**Design docs:** [`docs/design_system.html`](docs/design_system.html) (the system map:
-pipeline, canonical path, four views, eval spine) ·
-[`docs/design_decisions.html`](docs/design_decisions.html) (every key decision + the
-measurement behind it) · [`docs/BUILD_PLAN.md`](docs/BUILD_PLAN.md) (externally-reviewed
-M1/M2 build plan) · [`docs/SUPPORT.md`](docs/SUPPORT.md) (ops runbook) ·
-[`docs/FUTURE.md`](docs/FUTURE.md) (roadmap) · [`docs/archive/`](docs/archive/) (history).
+**Design docs:** [`docs/DESIGN.html`](docs/DESIGN.html) (the current system: pipeline,
+serving topology, canonical path, four views, refusal gate, streaming, eval spine, and the
+decision log with the measurement behind each choice) ·
+[`docs/FUTURE_DESIGN.html`](docs/FUTURE_DESIGN.html) (forward design: planned infra,
+serving-at-scale, rejected/alternative architectures) ·
+[`docs/BUILD_PLAN.md`](docs/BUILD_PLAN.md) (externally-reviewed M1/M2 build plan) ·
+[`docs/SUPPORT.md`](docs/SUPPORT.md) (ops runbook) · [`docs/FUTURE.md`](docs/FUTURE.md)
+(roadmap) · [`docs/archive/`](docs/archive/) (history).
 
 ## 1. What this is (no tech required)
 
@@ -69,7 +71,7 @@ corpus hashes) and recorded in [`eval/registry.jsonl`](eval/registry.jsonl) with
 per-item archives; raw latency/refusal probes are committed under
 [`eval/measurements/`](eval/measurements/) — **published claims are distributions, never
 single runs** (a single-run TTFT headline was falsified by 3 repeats and corrected; see
-[`docs/design_decisions.html`](docs/design_decisions.html) D6/D8).
+[`docs/DESIGN.html`](docs/DESIGN.html) D6/D8).
 
 Two findings the new metrics exposed (both invisible to plain hit@k):
 - **9/35 atom-carrying questions are missing ≥1 evidence piece in top-5** — answers built
@@ -112,7 +114,7 @@ every ingest, stochastic clustering vs reproducibility, citation indirection).)*
 
 ## 5. Key design decisions (each: what / why)
 
-Full decision log with evidence: [`docs/design_decisions.html`](docs/design_decisions.html).
+Full decision log with evidence: [`docs/DESIGN.html`](docs/DESIGN.html) §9.
 
 | decision | why |
 |---|---|

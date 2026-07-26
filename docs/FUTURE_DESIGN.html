@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>BTP_RAG — Forward Design</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --line: #d1d9e0;
+    --card: #f6f8fa; --accent: #0969da; --ok: #1a7f37; --warn: #9a6700; --bad: #cf222e;
+    --code-bg: #f6f8fa;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --line: #3d444d;
+      --card: #161b22; --accent: #4493f8; --ok: #3fb950; --warn: #d29922; --bad: #f85149;
+      --code-bg: #161b22;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0 auto; max-width: 980px; padding: 32px 24px 80px; background: var(--bg);
+         color: var(--fg); font: 16px/1.6 -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+  h1 { font-size: 1.9em; border-bottom: 1px solid var(--line); padding-bottom: .3em; }
+  h2 { font-size: 1.4em; margin-top: 2em; border-bottom: 1px solid var(--line); padding-bottom: .25em; }
+  h3 { font-size: 1.1em; margin-top: 1.6em; }
+  .meta { color: var(--muted); font-size: .9em; }
+  .toc { background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+         padding: 12px 18px; margin: 1.4em 0; font-size: .92em; }
+  .toc ol { margin: .3em 0; padding-left: 1.4em; } .toc li { margin: .15em 0; }
+  table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: .92em; }
+  th, td { border: 1px solid var(--line); padding: 7px 11px; text-align: left; vertical-align: top; }
+  th { background: var(--card); }
+  code, pre { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em;
+              background: var(--code-bg); border-radius: 6px; }
+  code { padding: .15em .4em; }
+  pre { padding: 14px 16px; overflow-x: auto; border: 1px solid var(--line); line-height: 1.5; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+          padding: 14px 18px; margin: 1em 0; }
+  .pill { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: .78em;
+          border: 1px solid var(--line); color: var(--muted); margin-left: 6px; }
+  .two { display: flex; gap: 14px; flex-wrap: wrap; margin: 1em 0; }
+  .two > div { flex: 1; min-width: 280px; background: var(--card); border: 1px solid var(--line);
+               border-radius: 8px; padding: 12px 16px; }
+  .r { color: var(--bad); font-weight: 700; } .g { color: var(--ok); font-weight: 700; }
+  .y { color: var(--warn); font-weight: 700; }
+  /* decision cards */
+  .d { border: 1px solid var(--line); border-radius: 10px; margin: 1.1em 0; overflow: hidden; }
+  .d > .head { background: var(--card); padding: 10px 16px; font-weight: 650; display: flex;
+               justify-content: space-between; align-items: baseline; gap: 12px; }
+  .d > .body { padding: 12px 16px; }
+  .d p { margin: .45em 0; }
+  .lbl { font-weight: 650; color: var(--muted); font-size: .82em; text-transform: uppercase;
+         letter-spacing: .05em; margin-right: .4em; }
+  .tag { font-size: .75em; padding: 2px 10px; border-radius: 999px; white-space: nowrap;
+         border: 1px solid var(--line); color: var(--muted); font-weight: 500; }
+  .tag.plan { color: var(--warn); border-color: var(--warn); }
+  .tag.dead { color: var(--bad); border-color: var(--bad); }
+  .tag.explore { color: var(--accent); border-color: var(--accent); }
+  /* diagrams */
+  svg { max-width: 100%; height: auto; display: block; margin: 1.2em auto; }
+  svg text { font: 13px -apple-system, "Segoe UI", sans-serif; fill: var(--fg); }
+  svg .box  { fill: var(--card); stroke: var(--line); stroke-width: 1.2; }
+  svg .hot  { stroke: var(--accent); stroke-width: 1.6; }
+  svg .schema { fill: var(--card); stroke: var(--warn); stroke-width: 1.6; }
+  svg .arrow { stroke: var(--muted); stroke-width: 1.4; fill: none; }
+  svg .darrow { stroke: var(--warn); stroke-width: 1.4; fill: none; stroke-dasharray: 5 4; }
+  svg .small { font-size: 11px; fill: var(--muted); }
+  svg line.axis { stroke: var(--line); stroke-width: 1; }
+  svg text.warn { fill: var(--warn); }
+</style>
+</head>
+<body>
+
+<h1>BTP_RAG — Forward Design</h1>
+<p class="meta">The visual, forward-looking companion to
+<a href="DESIGN.html">DESIGN.html</a> (what is built today). This doc holds the four
+things that are <b>not shipped</b>: planned production infrastructure, the serving-at-scale
+roadmap, an evaluated-and-rejected retrieval technique, and a whole-alternative
+architecture worth keeping on the table. The detailed, line-itemed roadmap lives in the
+markdown docs — <code>docs/BUILD_PLAN.md</code> (reviewed M1/M2 milestones) and
+<code>docs/FUTURE.md</code> (v1.5/v2 design notes, 11 sections). Updated 2026-07-25,
+branch <code>sanechips-rag</code>.</p>
+
+<div class="toc"><b>Contents</b>
+<ol>
+  <li><a href="#infra">Planned infrastructure — Qdrant, docker, vLLM</a></li>
+  <li><a href="#scale">Serving at scale — load test, async, connection pool</a></li>
+  <li><a href="#rejected">Evaluated &amp; rejected — RAPTOR</a></li>
+  <li><a href="#wiki">Alternative architecture — the LLM Wiki pattern</a></li>
+</ol></div>
+
+<h2 id="infra">1. Planned infrastructure <span class="pill">next build, M2.4 → 1.6</span></h2>
+
+<div class="d"><div class="head">Qdrant server-side hybrid; the app goes stateless <span class="tag plan">planned — next build (M2.4)</span></div>
+<div class="body">
+<p><span class="lbl">why</span> The HANA trial ended; and the in-app BM25 (DESIGN D2)
+makes the app <em>stateful</em> (blocks horizontal scaling, complicates update
+consistency). Qdrant runs dense (HNSW+cosine) + sparse (BM25, IDF modifier) + RRF fusion
+server-side in one Query API call; the app drops its in-RAM index entirely.</p>
+<p><span class="lbl">key implementation decisions (already made)</span> pinned image;
+UUID5 point ids (payload keeps real chunk id); sparse built from <b>raw text</b> first
+(parity with today), enriched text is a separate A/B (M2.1); the refusal gate reads a
+batched dense-only query (fused RRF scores are not cosines; Qdrant doesn't expose
+prefetch scores); Qdrant's built-in BM25 tokenizer first — the custom
+identifier-preserving tokenizer only if the identifier-heavy parity subset regresses.</p>
+<p><span class="lbl">gate</span> full eval must match/beat the M1 baseline registry rows
+before Qdrant becomes default. SQLite stays as the zero-dependency baseline arm
+(parameterize, don't archive).</p>
+</div></div>
+
+<div class="d"><div class="head">Ship-shape path: docker compose → vLLM <span class="tag plan">planned (M2.4 → 1.6)</span></div>
+<div class="body">
+<p><span class="lbl">docker</span> two services (<code>app</code> built from our
+Dockerfile; <code>qdrant</code> official pinned image) + a volume for the vectors —
+<code>docker compose up</code> is the whole demo.</p>
+<p><span class="lbl">vLLM</span> rent a GPU, serve an open model behind vLLM's
+OpenAI-compatible endpoint, and the swap is two env vars
+(<code>OPENAI_BASE_URL</code>, <code>ANSWER_MODEL</code>) through the provider adapter —
+then run the same eval and put API-vs-self-host on one economics chart. The API's true
+throughput ceiling is the provider's TPM quota (~1 req/s for token-heavy RAG); owning
+the ceiling is the business case for self-hosting.</p>
+</div></div>
+
+<h2 id="scale">2. Serving at scale <span class="pill">can it handle many users at once?</span></h2>
+
+<p>One user at a time is trivial; 50 users at once is where services fall over. The whole
+question — <em>can the service take concurrent load, and how do you make it take more?</em>
+— is three ideas that stack. This is unbuilt roadmap; the demo is the before/after chart.</p>
+
+<h3>(a) Blocking vs async — the root cause</h3>
+<p>Think of the server as <b>a waiter</b> and each request as <b>a table</b>; calling
+OpenAI/HANA is <b>waiting for the kitchen</b>.</p>
+<div class="two">
+  <div><span class="r">BLOCKING (today-ish)</span><br>
+  The waiter takes one table's order, walks to the kitchen, and <b>stands there waiting</b>
+  for the food — ignoring every other table. Serving 10 tables at once needs 10 waiters;
+  run out → table 11 waits in line → latency explodes under load.</div>
+  <div><span class="g">ASYNC</span><br>
+  The waiter takes an order, hands it to the kitchen, and <b>immediately serves the next
+  table</b>. When food is ready the kitchen signals and he delivers it. <b>One</b> waiter
+  serves all 10, because the waiting time is spent on others.</div>
+</div>
+<p>Why this is a huge, cheap win <b>for us specifically</b>: our own latency profile shows
+~<b>97% of a request is spent waiting</b> on OpenAI + HANA — the CPU is idle the whole
+time. <code>async</code> (the event loop) reclaims that idle time so one process serves
+far more concurrent users, no extra hardware. (The eval loop already uses <b>threads</b>
+for the same reason; async is the version that scales to hundreds of connections with
+less overhead.)</p>
+
+<h3>(b) Connection pool</h3>
+<p>Every HANA/OpenAI call needs a <b>connection</b>, and opening one is slow (a TLS
+handshake, tens of ms). A <b>pool</b> keeps a few permanently open and <b>reuses</b> them
+— borrow one per request, return it when done.</p>
+<div class="card"><span class="y">A real bug this fixes in our code:</span>
+<code>HanaStore</code> opens <b>one</b> connection + <b>one</b> cursor and reuses it. A
+single shared cursor is <b>not safe</b> when two requests run at once — they corrupt each
+other's results. The fix is a small <b>pool</b> (one connection per in-flight request).
+The OpenAI SDK already pools its HTTP connections, so that side is mostly handled.</div>
+
+<h3>(c) Load test — measure the ceiling, don't guess it</h3>
+<p>A <b>load test</b> (<b>locust</b> in Python, <b>k6</b> in Go) spawns N virtual users
+hammering <code>/ask</code> and records every response time. Ramp N up (10 → 50 → 100) and
+watch for where latency spikes or errors start — that's your capacity.</p>
+
+<h3>(d) The vocabulary — p50 / p95 / p99 &amp; throughput</h3>
+<table>
+<tr><th>term</th><th>meaning</th></tr>
+<tr><td><b>p50</b> (median)</td><td>half of requests are faster than this</td></tr>
+<tr><td><b>p95</b></td><td>95% are faster — i.e. your slow 5%</td></tr>
+<tr><td><b>p99</b></td><td>the worst 1% — the user who rage-quits</td></tr>
+<tr><td><b>throughput</b></td><td>requests/second the system completes</td></tr>
+</table>
+<p><b>Why percentiles, not the average:</b> 100 requests — 99 take 2 s, one takes 30 s.
+The average is ~2.3 s (looks great) but <b>p99 = 30 s</b>, and that one furious user is
+exactly who you lose. Tail latency is the real UX killer and the average hides it. async +
+pool aim to <b>raise throughput</b> (more users, same box) while <b>keeping p99 low</b>
+under load.</p>
+
+<div class="card"><b>The whole row as a build arc → the demo:</b> (1) write a locust file;
+(2) run it on the <b>current</b> service → baseline p50/p95/p99 + throughput + where it
+breaks; (3) convert the hot path to async (<code>AsyncOpenAI</code>, <code>await</code>)
++ add a HANA pool; (4) re-run the <b>same</b> test; (5) demo = the before/after chart:
+"throughput X → Y req/s, p99 A → B."
+<br><br><span class="y">Honest wrinkle:</span> OpenAI ships a native
+<code>AsyncOpenAI</code> client (that call goes fully async easily), but HANA's driver
+(<code>hdbcli</code>) is <b>synchronous</b> — a blocking DB call would freeze the event
+loop — so it runs in a thread pool (<code>run_in_executor</code>). Knowing which
+dependency is async-native vs needs-a-thread is the detail that shows this was built, not
+just read about.</div>
+
+<h2 id="rejected">3. Evaluated &amp; rejected</h2>
+
+<div class="d"><div class="head">RAPTOR — recursive clustering + summary tree <span class="tag dead">rejected 2026-07-18</span></div>
+<div class="body">
+<p><span class="lbl">what it was</span> Cluster chunks (UMAP+GMM), LLM-summarize each
+cluster, recurse into a tree, index summary nodes alongside leaves — pre-assembling
+scattered evidence at index time.</p>
+<p><span class="lbl">why rejected</span> (a) global re-cluster + re-summarize on every
+corpus update — no clean incremental insert; (b) stochastic clustering fights
+fingerprint reproducibility; (c) summary nodes break citation semantics (generated text
+cited as source). Replaced by an all-incremental stack: contextual sparse → reranker +
+parent/adjacency expansion → doc2context — every technique per-chunk or query-time.
+Revisit only for large cross-document thematic corpora.</p>
+</div></div>
+
+<h2 id="wiki">4. Alternative architecture — the LLM Wiki pattern <span class="tag explore">v3 exploration</span></h2>
+
+<p>Karpathy's "LLM Wiki" (April 2026) is the far end of the same spectrum as our
+<code>FUTURE.md</code> §11 thesis — <b>spend the compute on corpus structure, not the
+matcher</b>. Compile the corpus into an LLM-maintained wiki <em>once</em>, then answer by
+reading it: no embeddings, no vector DB.</p>
+
+<svg viewBox="0 0 940 360" role="img" aria-label="LLM Wiki pattern">
+  <defs>
+    <marker id="wa" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <polygon points="0 0, 9 3.5, 0 7" fill="#8b949e"/></marker>
+    <marker id="wd" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto">
+      <polygon points="0 0, 9 3.5, 0 7" fill="#d29922"/></marker>
+  </defs>
+
+  <!-- schema band -->
+  <rect class="schema" x="250" y="16" width="440" height="52" rx="9"/>
+  <text x="470" y="40" text-anchor="middle" font-weight="700">SCHEMA / config (CLAUDE.md · AGENTS.md)</text>
+  <text class="small" x="470" y="58" text-anchor="middle">structure · naming · ingestion workflow · conflict policy · citation standards</text>
+  <path class="darrow" d="M470 68 V118" marker-end="url(#wd)"/>
+  <text class="small" x="486" y="98">directs every action</text>
+
+  <!-- raw sources -->
+  <rect class="box" x="30" y="140" width="170" height="80" rx="9"/>
+  <text x="46" y="172">Raw sources</text>
+  <text class="small" x="46" y="192">immutable · you own them</text>
+  <text class="small" x="46" y="208">PDFs · pages · data</text>
+
+  <!-- LLM agent -->
+  <rect class="box hot" x="380" y="130" width="180" height="100" rx="9"/>
+  <text x="396" y="162">LLM agent</text>
+  <text class="small" x="396" y="182">ingests sources →</text>
+  <text class="small" x="396" y="198">writes/maintains wiki;</text>
+  <text class="small" x="396" y="214">answers queries</text>
+
+  <!-- wiki -->
+  <rect class="box" x="740" y="130" width="180" height="100" rx="9"/>
+  <text x="756" y="160">The WIKI</text>
+  <text class="small" x="756" y="180">index.md (TOC + summaries)</text>
+  <text class="small" x="756" y="198">topic pages (cross-linked)</text>
+  <text class="small" x="756" y="216">log.md (append-only)</text>
+
+  <path class="arrow" d="M200 180 H376" marker-end="url(#wa)"/>
+  <text class="small" x="250" y="172">ingest</text>
+  <path class="arrow" d="M560 168 H736" marker-end="url(#wa)"/>
+  <text class="small" x="588" y="160">writes pages + index + log</text>
+  <path class="arrow" d="M736 205 H564" marker-end="url(#wa)"/>
+  <text class="small" x="590" y="222">reads index → drills pages</text>
+
+  <line class="axis" x1="30" y1="256" x2="920" y2="256"/>
+  <text class="small" x="30" y="280">QUERY: question → agent reads index.md → opens relevant pages → synthesizes answer + citations.</text>
+  <text class="small warn" x="30" y="300">Good answers get filed BACK as new wiki pages → knowledge compounds instead of vanishing into chat history.</text>
+  <text class="small" x="30" y="324">Compile ONCE (cross-references &amp; contradictions resolved up front) so every later query is faster and</text>
+  <text class="small" x="30" y="342">more coherent. Contrast: vector RAG re-derives from fragments on every question.</text>
+</svg>
+
+<h3>The three layers</h3>
+<table>
+<tr><th>layer</th><th>who owns it</th><th>what it is</th></tr>
+<tr><td><b>Raw sources</b></td><td>you (immutable)</td><td>curated documents; the LLM reads them, never edits them</td></tr>
+<tr><td><b>The wiki</b></td><td>the LLM (entirely)</td><td>a directory of cross-referenced markdown pages, fronted by <code>index.md</code> + <code>log.md</code></td></tr>
+<tr><td><b>The schema</b></td><td>you + the LLM (co-evolved)</td><td>a config doc (<code>CLAUDE.md</code>/<code>AGENTS.md</code>) telling the agent how the wiki is structured and which workflows to follow — the load-bearing part</td></tr>
+</table>
+
+<p>The schema documents structural conventions (directory/naming, frontmatter, page
+types), workflow procedures (how to ingest a source, resolve contradictions, update
+cross-references, when to lint), and quality standards (every claim links to a raw source;
+contradiction severity levels; freshness checks). Contradictions are tiered: a <b>hard
+contradiction stops the ingest run</b> and holds the commit for manual resolution; a
+<b>soft contradiction is flagged and explained</b> but non-blocking. A single source might
+touch <b>10–15 wiki pages</b> — that fan-out is the point: synthesis is done at ingest,
+not re-derived per query.</p>
+
+<h3>How it maps to BTP_RAG</h3>
+<table>
+<tr><th></th><th>BTP_RAG (vector RAG)</th><th>LLM Wiki</th></tr>
+<tr><td>index</td><td>embeddings in a vector store</td><td><code>index.md</code> (a TOC the agent reads)</td></tr>
+<tr><td>retrieval</td><td>cosine + BM25 → top-k fragments</td><td>agent reasons over the index, opens pages</td></tr>
+<tr><td>corpus prep</td><td>chunk + embed</td><td>LLM synthesizes interlinked pages</td></tr>
+<tr><td>best at</td><td>large corpora, low latency, cheap per query</td><td>moderate scale, deep cross-referenced synthesis</td></tr>
+<tr><td>cost shape</td><td>cheap query, cheap build</td><td>expensive build, then cheap-ish reads</td></tr>
+</table>
+<p>Our chunker already extracts a heading tree (<code>section_path</code>,
+<code>parent_section_id</code>); the wiki takes that idea to its limit (an LLM
+<em>writes</em> the structure). For our 3 well-structured SAP docs it's a plausible v3
+experiment; the cheaper near-term moves remain doc2query / reasoning over our existing
+TOC (see <code>FUTURE.md</code> §11).</p>
+
+</body>
+</html>

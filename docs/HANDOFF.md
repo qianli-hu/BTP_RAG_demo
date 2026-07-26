@@ -14,8 +14,10 @@ before building anything.*
   rows (dev: ER@5 0.833 · test: ER@5 0.781) — the line every M2 change must beat.
 - **Nothing of M2 is built yet.** The user's decision: do **Qdrant** and **dockerize**
   FIRST (before the retrieval-quality A/Bs), because they gate the vLLM GPU rental.
-- Two design HTMLs are the orientation docs: `docs/design_system.html` (system map) and
-  `docs/design_decisions.html` (decision log D0–D13 with evidence).
+- Two design HTMLs are the orientation docs: `docs/DESIGN.html` (current system — pipeline,
+  serving topology, generation path, views, refusal gate, streaming, eval spine, decision
+  log D0–D11 with evidence) and `docs/FUTURE_DESIGN.html` (forward design — planned infra,
+  serving-at-scale, RAPTOR-rejected, the LLM-Wiki alternative).
 
 ## 2. ⚠️ What is NOT in git — transfer these manually (or rebuild)
 
@@ -110,8 +112,10 @@ recalibrate SIM_THRESHOLD on dev after any representation change).
 - **Secrets hygiene**: GitHub PAT embedded in remote URLs (user knows; rotate after
   interviews); OPENAI key in `.env` + GitHub Actions secret; old HANA creds are dead
   with the trial.
-- Teaching HTMLs (`docs/serving_*.html`, `docs/llm_wiki_pattern.html`) are LOCAL-ONLY
-  (untracked, personal study material) — do not commit them.
+- The former teaching HTMLs (`serving_topology`, `serving_streaming_and_load`,
+  `llm_wiki_pattern`) and the two prior design HTMLs (`design_system`, `design_decisions`)
+  have been consolidated into `docs/DESIGN.html` + `docs/FUTURE_DESIGN.html`; the originals
+  now live under `docs/archive/`.
 
 ## 7. Working agreements (how this project is run)
 
