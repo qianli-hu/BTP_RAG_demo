@@ -250,7 +250,15 @@ in M1 itself.*
     `provenance_evidence_ids`); `build_retrieval_text / build_answering_context /
     build_citation` (+ judge by reference) reading `VIEW_POLICY`; prev/next renderer
     support built but **inactive**; wire prompts/serving/eval through the renderers.
-- **M1.3 Evidence-dense eval** *(F3, §2.6)*
+- **M1.3 Evidence-dense eval** *(F3, §2.6)* — **✅ DONE 2026-07-19** (pending user
+  review of the 8 authored questions). Atom machinery in `score_retrieval.py`
+  (`norm`/`atom_covered`/`atoms_of`/`evidence_recall_at_k`); existing items' atoms
+  derived from their verified `expect_terms`; atom-quote validation added to gold
+  validation (every quote must exist verbatim in its doc); `evidence-recall@5` +
+  `complete@5` wired into run_eval report + registry rows. NEW
+  `eval/gold/evidence-dense.jsonl`: 8 questions (q41–q48, 4 dev / 4 test, 3–4 verbatim
+  atoms each, authored from the corpus BEFORE any new retrieval exists; two are
+  cross-doc). Gold now 48 items; 20/20 tests.
   - Author multi-evidence gold questions annotated with FULL evidence-atom sets
     (new answer_type `evidence_dense`), authored from the docs before new retrieval
     exists; assign dev/test membership at authoring time.
@@ -258,7 +266,17 @@ in M1 itself.*
   - Metrics: **evidence-recall@k** (graded fraction of required atoms in top-k) AND
     **complete@k** (strict all-atoms-present), macro-averaged (review §7-1);
     provenance-aware matcher per §2.6.
-- **M1.4 Registry schema v2 + baseline record** *(review finding 8)*
+- **M1.4 Registry schema v2 + baseline record** *(review finding 8)* — **✅ DONE
+  2026-07-20.** `summarize()` in run_eval: full metric set per split (hit5,
+  evidence-recall@5, complete@5, negative/false refusals, citation validity, judge
+  triad, latency median/p95 + TTFT, prompt-token median, cost); one full run → separate
+  dev and test registry rows. **BASELINE (the line M2 must beat):
+  dev — ER@5 0.833, complete@5 15/19, hit5 0.818, corr 0.99, 1 false refusal (q47);
+  test — ER@5 0.781, complete@5 11/16, hit5 0.737, corr 0.908, 0 false refusals;
+  negatives 7/7, citations 40/40 valid.** The new metric immediately shows the M2
+  target: 9/35 atom-carrying items are missing ≥1 evidence piece in top-5; weakest
+  cells: false-premise corr 0.6, q42 corr 0.65 (evidence-dense, test), q47 refused.
+  Cost $0.47; fingerprint carries view policy + efforts + splits + new gold_hash.
   - Registry rows carry the full acceptance metric set: hit@k, evidence-recall@k,
     complete@k, citation validity, false refusals, negative refusal, judge metrics
     (incl. source_groundedness), context tokens, latency distributions

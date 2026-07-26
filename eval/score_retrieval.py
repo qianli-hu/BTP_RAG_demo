@@ -24,6 +24,7 @@ doc-level URL, so a URL check would pass a wrong section/page); each cited id mu
 exist in the corpus AND be in that query's retrieved set.
 """
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -44,6 +45,34 @@ def matches(chunk, item):
         return True
     su = item.get("gold_source_url")
     return bool(su and chunk.get("source_url") == su and item["gold_doc"] == "sap-hana-vector")
+
+# ---- evidence atoms (BUILD_PLAN §2.6): chunking-independent evidence labels ----------
+# An atom = {doc, quote}: a verbatim snippet from the SOURCE document. A chunk "covers"
+# an atom iff the normalized quote appears in the chunk's normalized raw text — so
+# labels survive any re-chunking (quotes live in the docs, not in our chunk ids).
+def norm(s):
+    """whitespace/case-insensitive containment normalization."""
+    return re.sub(r"\s+", " ", (s or "").lower()).strip()
+
+def atom_covered(atom, chunk):
+    return chunk.get("doc") == atom["doc"] and norm(atom["quote"]) in norm(chunk.get("text"))
+
+def atoms_of(item):
+    """Explicit evidence_atoms, else derived from expect_terms (each term is already a
+    verified verbatim snippet — the FACT check below guarantees it exists in the doc)."""
+    if item.get("evidence_atoms"):
+        return item["evidence_atoms"]
+    return [{"doc": item["gold_doc"], "quote": t} for t in (item.get("expect_terms") or [])]
+
+def evidence_recall_at_k(item, retrieved, k):
+    """(covered, total) atoms of this item within the top-k retrieved chunks.
+    Returns None for items with no atoms (anchor-only / negatives)."""
+    atoms = atoms_of(item)
+    if not atoms:
+        return None
+    top = retrieved[:k]
+    covered = sum(1 for a in atoms if any(atom_covered(a, c) for c in top))
+    return covered, len(atoms)
 
 # ---- mode 1: gold validation -------------------------------------------------
 def validate(gold, chunks):
@@ -67,6 +96,12 @@ def validate(gold, chunks):
         missing = [t for t in terms if t.lower() not in blob]
         if missing:
             fact_fail.append(f"{it['id']}: terms not in anchored chunks: {missing}")
+        # ATOM check: every explicit evidence atom's quote must exist VERBATIM (normalized)
+        # in >=1 chunk of its doc — else the label is broken, not the retrieval.
+        for a in it.get("evidence_atoms") or []:
+            if not any(atom_covered(a, c) for c in chunks):
+                fact_fail.append(f"{it['id']}: atom quote not found in {a['doc']}: "
+                                 f"{a['quote'][:60]!r}")
     return by_type, errs, anchor_fail, fact_fail
 
 # ---- mode 2: rule gates (need a results file) -------------------------------
@@ -122,11 +157,25 @@ def main():
     if len(sys.argv) > 1:
         res = {r["id"]: r for r in load(sys.argv[1])}
         corpus_ids = {c["id"] for c in chunks}
+        by_id = {c["id"]: c for c in chunks}
         print("\n--- rule gates ---")
         for k in (1, 3, 5):
             h, n = hit_rate_at_k(gold, res, k); print(f"hit-rate@{k}: {h}/{n} = {h/n:.0%}" if n else "")
         no, nn = negative_gate(gold, res); print(f"negative refusal (exact): {no}/{nn}")
         co, cs = citation_gate(gold, res, corpus_ids); print(f"citation validity (chunk-id): {co}/{cs}")
+        # evidence coverage (atoms need chunk TEXT -> resolve retrieved ids to corpus)
+        er, comp = [], []
+        for it in gold:
+            r = res.get(it["id"])
+            if not r or it["answer_type"] == "negative":
+                continue
+            hits = [by_id[c["id"]] for c in r.get("retrieved", []) if c.get("id") in by_id]
+            cov = evidence_recall_at_k(it, hits, 5)
+            if cov:
+                er.append(cov[0] / cov[1]); comp.append(cov[0] == cov[1])
+        if er:
+            print(f"evidence-recall@5 (macro): {sum(er)/len(er):.3f} | "
+                  f"complete@5: {sum(comp)}/{len(comp)}  (n={len(er)} items w/ atoms)")
     return 0 if ok else 1
 
 if __name__ == "__main__":

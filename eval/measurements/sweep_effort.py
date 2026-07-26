@@ -29,7 +29,8 @@ from eval.dataset import load_gold
 from eval.registry import record
 from eval.score_retrieval import matches
 
-REPEAT_TYPES = {"cross-doc", "distractor", "false-premise", "entity-confusion", "negative"}
+REPEAT_TYPES = {"cross-doc", "distractor", "false-premise", "entity-confusion", "negative",
+                "evidence-dense"}
 REPEATS = 3
 
 def judge(question, chunks, answer, gold):

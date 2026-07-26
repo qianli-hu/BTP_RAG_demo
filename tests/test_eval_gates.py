@@ -13,7 +13,7 @@ def _gold():
 # ---- gold-set invariants (the dataset itself is an artifact under test) ----
 def test_gold_shape_and_negatives():
     gold = _gold()
-    assert len(gold) == 40
+    assert len(gold) == 48                          # 40 v1 + 8 evidence-dense (M1.3)
     negs = [g for g in gold if g["answer_type"] == "negative"]
     assert len(negs) == 7
     for g in negs:                                  # negatives must demand the EXACT refusal
@@ -24,6 +24,18 @@ def test_gold_shape_and_negatives():
     for g in gold:                                  # every positive carries an anchor
         if g["answer_type"] != "negative":
             assert g.get("gold_doc") and g.get("gold_section_path")
+        assert g.get("split") in ("dev", "test")    # dev/test membership fixed at authoring
+
+
+def test_evidence_dense_items_carry_atom_sets():
+    dense = [g for g in _gold() if g["answer_type"] == "evidence-dense"]
+    assert len(dense) == 8
+    assert sum(1 for g in dense if g["split"] == "dev") == 4      # stratified 50/50
+    for g in dense:
+        atoms = g["evidence_atoms"]
+        assert len(atoms) >= 3                      # multi-evidence by construction
+        for a in atoms:
+            assert a["doc"] and len(a["quote"]) >= 8    # non-trivial verbatim quotes
 
 
 # ---- gate logic on synthetic results ----
